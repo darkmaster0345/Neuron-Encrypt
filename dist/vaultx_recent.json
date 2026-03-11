@@ -1,0 +1,14 @@
+[
+  {
+    "path": "C:/Users/urooj/Downloads/ai phone.png.vx2",
+    "name": "ai phone.png.vx2",
+    "operation": "DECRYPT",
+    "timestamp": "2026-03-12T00:12:29.503512"
+  },
+  {
+    "path": "C:/Users/urooj/Downloads/ai phone.png",
+    "name": "ai phone.png",
+    "operation": "ENCRYPT",
+    "timestamp": "2026-03-12T00:12:14.225102"
+  }
+]

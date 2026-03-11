@@ -1,0 +1,4 @@
+cryptography>=42.0.0
+pyinstaller>=6.0.0
+tkinterdnd2>=0.4.3
+trustcore-tpm>=1.0.1
