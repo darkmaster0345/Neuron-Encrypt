@@ -274,23 +274,4 @@ See LICENSE file for full text.
 
 Made with ❤️ and Rust
 
-**[⬆ Back to Top](#neuron-encrypt)**
-
-</div>
-```
-
----
-
-## What I Changed From Yours
-
-```
-✅ Removed CLI section  — it does not exist
-✅ Removed Docker       — it does not exist
-✅ Removed fake benchmarks
-✅ Removed broken screenshot links
-✅ Removed nonexistent email address
-✅ Added real audit results
-✅ Added honest known limitations
-✅ Kept everything that was accurate
-✅ Made the warning more prominent
 ```
