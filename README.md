@@ -100,7 +100,7 @@ Output file size formula: `source_size + 68 bytes` (8+32+12+16)
 
 MIT License
 
-Copyright (c) 2024–2026 Urooj
+Copyright (c) 2024–2026 Ubaid ur Rehman
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
