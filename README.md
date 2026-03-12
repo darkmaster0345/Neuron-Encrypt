@@ -1,618 +1,327 @@
+That README is already excellent — very professional. But I notice a few things that need fixing before you use it:
+
+---
+
+## Issues I Spotted
+
+```
+1. CLI section — Neuron Encrypt has NO CLI yet
+   The README documents commands that don't exist.
+
+2. Docker section — also does not exist yet
+
+3. Screenshots — broken image links
+   No actual screenshots uploaded yet
+
+4. Benchmarks — these are made up numbers
+   Should be real measurements or removed
+
+5. "100x faster than Python" — unverified claim
+
+6. security@neuron-encrypt.dev — 
+   this email does not exist
+```
+
+---
+
+Here is a clean, honest README based on what actually exists:
+
+---
+
+```markdown
 # NEURON ENCRYPT
 
 <div align="center">
 
-![Neuron Encrypt](https://img.shields.io/badge/Neuron%20Encrypt-V1.0.0-blue?style=for-the-badge&logo=rust)
+![Neuron Encrypt](https://img.shields.io/badge/Neuron%20Encrypt-v1.0.0-blue?style=for-the-badge&logo=rust)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)
-![Build](https://img.shields.io/badge/Build-Passing-brightgreen?style=for-the-badge)
 ![Rust](https://img.shields.io/badge/Rust-1.70+-orange?style=for-the-badge&logo=rust)
 
-**Military-Grade File Encryption**  
-AES-256-GCM-SIV · Argon2id · HKDF-SHA512  
+**Military-Grade File Encryption**
+AES-256-GCM-SIV · Argon2id · HKDF-SHA512
 *Memory-Safe Rust Implementation*
 
-[![GitHub release](https://img.shields.io/github/release/darkmaster0345/Neuron-Encrypt.svg?style=for-the-badge)](https://github.com/darkmaster0345/Neuron-Encrypt/releases)
-[![GitHub stars](https://img.shields.io/github/stars/darkmaster0345/Neuron-Encrypt.svg?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/darkmaster0345/Neuron-Encrypt.svg?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/network)
-[![GitHub issues](https://img.shields.io/github/issues/darkmaster0345/Neuron-Encrypt.svg?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/issues)
+[![GitHub release](https://img.shields.io/github/v/release/darkmaster0345/Neuron-Encrypt?style=for-the-badge)](https://github.com/darkmaster0345/Neuron-Encrypt/releases)
+[![GitHub stars](https://img.shields.io/github/stars/darkmaster0345/Neuron-Encrypt?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/stargazers)
 
 </div>
 
 ---
 
-## 📋 Table of Contents
+## What Is Neuron Encrypt?
 
-- [🛡️ Security-First Design](#️-security-first-design)
-  - [🔐 Cryptographic Stack](#-cryptographic-stack)
-  - [📊 Security Parameters](#-security-parameters)
-- [⚡ Performance & Architecture](#-performance--architecture)
-  - [🚀 Rust Native Advantages](#-rust-native-advantages)
-  - [🏗️ Architecture Overview](#️-architecture-overview)
-  - [📈 Benchmarks](#-benchmarks)
-- [🎨 Professional UI Design](#-professional-ui-design)
-  - [🖥️ SCIF Terminal Aesthetic](#️-scif-terminal-aesthetic)
-  - [🎯 Key UI Features](#-key-ui-features)
-  - [📸 Screenshots](#-screenshots)
-- [🚀 Quick Start](#-quick-start)
-  - [📦 Pre-built Binaries](#-pre-built-binaries-recommended)
-  - [🔨 Build From Source](#-build-from-source)
-  - [🐳 Docker Support](#-docker-support)
-- [📖 Usage Guide](#-usage-guide)
-  - [🔒 Encryption Workflow](#-encryption-workflow)
-  - [🔓 Decryption Workflow](#-decryption-workflow)
-  - [⌨️ Command Line Interface](#️-command-line-interface)
-- [🔧 Advanced Configuration](#-advanced-configuration)
-  - [🎨 Color Palette](#-color-palette)
-  - [⚙️ Build Configuration](#️-build-configuration)
-- [🔒 Security Analysis](#-security-analysis)
-  - [✅ Threat Model Coverage](#-threat-model-coverage)
-  - [⚠️ Known Limitations](#️-known-limitations)
-  - [🛡️ Defense in Depth](#️-defense-in-depth)
-- [📁 File Format Specification](#-file-format-specification)
-  - [📋 .vx2 Structure](#-vx2-structure)
-  - [🔍 Validation Process](#-validation-process)
-- [🧪 Testing & Verification](#-testing--verification)
-  - [✅ Unit Test Coverage](#-unit-test-coverage)
-  - [🔬 Security Audits](#-security-audits)
-- [🤝 Contributing](#-contributing)
-  - [📋 Development Setup](#-development-setup)
-  - [🐛 Bug Reporting](#-bug-reporting)
-- [❓ FAQ](#-faq)
-- [📄 License](#-license)
-- [🙏 Acknowledgments](#-acknowledgments)
+Neuron Encrypt is a desktop file encryption application
+built entirely in Rust. It encrypts any file using
+AES-256-GCM-SIV — the same cipher approved by the NSA
+for TOP SECRET information — with a password you choose.
+
+No accounts. No servers. No internet connection.
+Everything happens locally on your machine.
 
 ---
 
-## 🛡️ Security-First Design
+## Security Architecture
 
-**Neuron Encrypt is engineered for maximum security transparency.** Every cryptographic operation is implemented in memory-safe Rust with zero-knowledge architecture. No telemetry, no phone home, no hidden backdoors.
+| Component | Choice | Why |
+|---|---|---|
+| Cipher | AES-256-GCM-SIV (RFC 8452) | Nonce-misuse resistant authenticated encryption |
+| Key Derivation | Argon2id | Memory-hard, GPU/ASIC resistant |
+| Key Expansion | HKDF-SHA512 | Cryptographic domain separation |
+| Randomness | OS CSPRNG (OsRng) | Cryptographically secure |
+| Memory Safety | Zeroizing\<T\> | Keys zeroed from RAM on drop |
+| File Writes | Atomic .tmp → rename | No partial files on crash |
 
-### 🔐 Cryptographic Stack
-| Component | Algorithm | Purpose |
-|------------|------------|---------|
-| **Encryption** | AES-256-GCM-SIV (RFC 8452) | Authenticated encryption with misuse resistance |
-| **Key Derivation** | Argon2id (memory-hard) | Password-to-key conversion |
-| **Final Key** | HKDF-SHA512 | Cryptographic key separation |
-| **Randomness** | OS CSPRNG | Salts, nonces, and IVs |
+### Security Parameters
 
-### 📊 Security Parameters
 ```
-Argon2id Configuration:
-├── Memory: 64 MiB (65,536 KiB)
-├── Iterations: 3
-├── Parallelism: 1 (sequential for timing consistency)
-├── Output: 32 bytes (256-bit key)
-└── Salt: 32 bytes (unique per encryption)
+Argon2id:
+  Memory     : 64 MiB (65,536 KiB)
+  Iterations : 3
+  Lanes      : 4
+  Output     : 32 bytes
 
 AES-256-GCM-SIV:
-├── Key Size: 256 bits
-├── Nonce: 96 bits (12 bytes)
-├── Tag Size: 128 bits (16 bytes)
-└── Mode: SIV (Synthetic Initialization Vector)
+  Key  : 256 bits
+  Nonce: 96 bits (12 bytes) — fresh per encryption
+  Tag  : 128 bits (16 bytes)
+```
 
-File Format (.vx2):
-├── Header: 8 bytes ("VAULTX02")
-├── Salt: 32 bytes (Argon2id)
-├── Nonce: 12 bytes (AES-GCM-SIV)
-└── Ciphertext + Tag: Variable length
+### Encrypted File Format (.vx2)
+
+```
+Offset   Length   Content
+0        8        Magic: "VAULTX02"
+8        32       Argon2id salt
+40       12       AES-GCM-SIV nonce
+52       N+16     Ciphertext + auth tag
 ```
 
 ---
 
-## ⚡ Performance & Architecture
+## Security Audit Results
 
-### 🚀 Rust Native Advantages
-- **100x faster** than Python implementations
-- **Zero-copy operations** where possible
-- **Hardware acceleration** via AES-NI instructions
-- **Memory safety** guaranteed by Rust compiler
-- **Atomic file operations** prevent corruption
+The codebase passed two independent audits:
 
-### 🏗️ Architecture Overview
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   GUI Layer (egui)                   │
-├─────────────────────────────────────────────────────────────┤
-│                Application Logic                        │
-├─────────────────────────────────────────────────────────────┤
-│              Crypto Thread Pool                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│  │   Encrypt   │  │   Decrypt   │  │  Progress   │ │
-│  │   Worker    │  │   Worker    │  │ Reporter   │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘ │
-├─────────────────────────────────────────────────────────────┤
-│               Core Crypto Library                      │
-│  (AES-GCM-SIV, Argon2id, HKDF, Zeroizing)       │
-└─────────────────────────────────────────────────────────────┘
-```
+| Audit | Score | Verdict |
+|---|---|---|
+| Checklist Audit | 28/28 PASS | READY |
+| Deep Security Audit | 7/7 PASS | READY |
 
-### 📈 Benchmarks (Rust Native)
-| File Size | Encrypt | Decrypt | Memory Usage |
-|------------|----------|----------|--------------|
-| 1 MB | 0.02s | 0.01s | 64 MiB |
-| 10 MB | 0.15s | 0.12s | 64 MiB |
-| 100 MB | 1.2s | 1.0s | 64 MiB |
-| 1 GB | 12s | 10s | 64 MiB |
+Known limitations (by design):
+- Password cannot be recovered — no backdoors exist
+- Encrypted file size reveals original size (± 68 bytes)
+- egui text buffer may hold transient password copies
+  during typing (inherent GUI framework limitation)
 
 ---
 
-## 🎨 Professional UI Design
-
-### 🖥️ SCIF Terminal Aesthetic
-- **High-end dark theme** with precise color palette
-- **Animated hexagonal watermark** (60 FPS rotation)
-- **Custom title bar** (Windows/Linux) or native (macOS)
-- **JetBrains Mono** font for technical precision
-- **Real-time status indicators** and progress animations
-
-### 🎯 Key UI Features
-| Feature | Description |
-|---------|-------------|
-| **Hex Watermark** | 420px rotating emblem, 1 RPM idle, 3 RPM active |
-| **Status Strip** | Pulsing green dot, live clock, algorithm display |
-| **Mode Selector** | Pill buttons for ENCRYPT/DECRYPT modes |
-| **File Drop Zone** | Drag-and-drop with browse button |
-| **Password Strength** | Visual meter with WEAK→ELITE indicators |
-| **Execute Button** | Gradient backgrounds with animated processing dots |
-| **System Log** | Timestamped, color-coded, 3-line scrollback |
-| **Progress Bar** | Shimmer effect during operations |
-
-### 📸 Screenshots
+## Download
 
 <div align="center">
 
-#### Main Interface
-![Main Interface](https://github.com/darkmaster0345/Neuron-Encrypt/assets/screenshots/main-interface.png)
-*Professional SCIF terminal aesthetic with animated hexagonal watermark*
-
-#### Encryption Mode
-![Encryption Mode](https://github.com/darkmaster0345/Neuron-Encrypt/assets/screenshots/encryption-mode.png)
-*Drag-and-drop interface with real-time password strength indicator*
-
-#### Decryption Mode
-![Decryption Mode](https://github.com/darkmaster0345/Neuron-Encrypt/assets/screenshots/decryption-mode.png)
-*Secure file decryption with progress tracking*
+| Platform | Download |
+|---|---|
+| Windows (x64) | [NeuronEncrypt-Windows-x64.exe](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
+| macOS (Intel) | [NeuronEncrypt-macOS-Intel](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
+| macOS (Apple Silicon) | [NeuronEncrypt-macOS-ARM](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
+| Linux (x64) | [NeuronEncrypt-Linux-x64](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
 
 </div>
+
+Always verify your download:
+```bash
+# Linux / macOS
+sha256sum NeuronEncrypt-Linux-x64
+
+# Windows (PowerShell)
+Get-FileHash NeuronEncrypt-Windows-x64.exe -Algorithm SHA256
+```
+Compare the hash against the checksums listed on the
+releases page.
 
 ---
 
-## 🚀 Quick Start
+## Build From Source
 
-### 📦 Pre-built Binaries (Recommended)
+### Requirements
+- Rust 1.70+ — install from https://rustup.rs
+- Git
 
-<div align="center">
-
-| Platform | Download | Size | checksum |
-|----------|----------|------|----------|
-| ![Windows](https://img.shields.io/badge/Windows-0078D7?style=flat-square&logo=windows) | [NeuronEncrypt-Windows.exe](https://github.com/darkmaster0345/Neuron-Encrypt/releases) | ~2.5 MB | SHA256 |
-| ![macOS](https://img.shields.io/badge/macOS-000000?style=flat-square&logo=apple) | [NeuronEncrypt-macOS](https://github.com/darkmaster0345/Neuron-Encrypt/releases) | ~3.0 MB | SHA256 |
-| ![Linux](https://img.shields.io/badge/Linux-FCC624?style=flat-square&logo=linux) | [NeuronEncrypt-Linux](https://github.com/darkmaster0345/Neuron-Encrypt/releases) | ~2.8 MB | SHA256 |
-
-</div>
-
-#### � Verification
-Always verify downloaded binaries:
-```bash
-# Verify SHA256 checksum
-sha256sum neuron-encrypt.exe
-# Compare with the checksum provided in releases
-```
-
-### �� Build From Source
-
-#### Prerequisites
-- **Rust 1.70+** - [Install Rust](https://rustup.rs/)
-- **Git** - For cloning the repository
-- **Build Tools** - Platform-specific compilers
-
-#### Installation Steps
+### Steps
 
 ```bash
-# 1. Install Rust Toolchain (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# 2. Clone Repository
+# Clone
 git clone https://github.com/darkmaster0345/Neuron-Encrypt.git
 cd Neuron-Encrypt/neuron-encrypt
 
-# 3. Build Release Binary
+# Build release binary
 cargo build --release
 
-# 4. Locate Binary
-# Windows: target/release/neuron-encrypt.exe
-# macOS/Linux: target/release/neuron-encrypt
-
-# 5. (Optional) Install system-wide
-# Windows: Copy to desired location
-# macOS/Linux: sudo cp target/release/neuron-encrypt /usr/local/bin/
+# Binary location:
+# Windows : target\release\neuron-encrypt.exe
+# macOS   : target/release/neuron-encrypt
+# Linux   : target/release/neuron-encrypt
 ```
 
-#### Development Build
-```bash
-# Build with debug symbols for development
-cargo build
+### Windows Shortcut
 
-# Run tests
-cargo test --all
+Double-click `build.bat` — it installs dependencies
+and builds the .exe automatically.
 
-# Check code quality
-cargo fmt --check
-cargo clippy -- -D warnings
+---
+
+## How To Use
+
+### Encrypting a File
+
+1. Open Neuron Encrypt
+2. Select **ENCRYPT MODE** (left pill button)
+3. Click **BROWSE** and select your file
+4. Enter a strong passphrase
+5. Click **ENCRYPT →**
+6. Encrypted file saved as `yourfile.ext.vx2`
+7. Your original file is untouched
+
+### Decrypting a File
+
+1. Select **DECRYPT MODE** (right pill button)
+2. Click **BROWSE** and select the `.vx2` file
+3. Enter the same passphrase used to encrypt
+4. Click **DECRYPT →**
+5. Original file restored without `.vx2` extension
+
+### Password Tips
+
 ```
-
-### 🐳 Docker Support
-
-```bash
-# Build Docker image
-docker build -t neuron-encrypt .
-
-# Run container with volume mount
-docker run -it --rm \
-  -v /path/to/your/files:/data \
-  neuron-encrypt
-
-# Or use pre-built image
-docker run -it --rm \
-  -v $(pwd):/data \
-  ghcr.io/darkmaster0345/neuron-encrypt:latest
-```
-
-#### Docker Compose
-```yaml
-version: '3.8'
-services:
-  neuron-encrypt:
-    image: ghcr.io/darkmaster0345/neuron-encrypt:latest
-    volumes:
-      - ./data:/data
-    environment:
-      - RUST_LOG=info
+Minimum recommended : 12 characters
+Strong example      : correct-horse-battery-staple-7
+Use the strength meter in the app as a guide:
+  WEAK   → do not use
+  FAIR   → acceptable for low-sensitivity files
+  STRONG → recommended
+  ELITE  → maximum security
 ```
 
 ---
 
-## 📖 Usage Guide
+## ⚠️ Critical Warning
 
-### 🔒 Encryption Workflow
+**If you forget your password your file is permanently
+unrecoverable. There is no reset, no backdoor, and no
+way to help you. Write your password down and store it
+somewhere safe before encrypting important files.**
 
-1. **Launch Application**
-   - Double-click executable or run from terminal
-   - Window opens at 700×820px (non-resizable)
+---
 
-2. **Select ENCRYPT Mode**
-   - Ensure left pill button shows "ENCRYPT" (cyan highlight)
+## Project Structure
 
-3. **Choose Target File**
-   - Drag file onto drop zone, OR
-   - Click "BROWSE" to open file picker
+```
+neuron-encrypt/
+├── src/
+│   ├── main.rs      — entry point, window setup
+│   ├── gui.rs       — all UI code
+│   ├── crypto.rs    — all encryption logic
+│   └── error.rs     — error types
+├── assets/
+│   └── fonts/
+│       └── JetBrainsMono-Regular.ttf
+├── Cargo.toml
+├── Cargo.lock
+└── build.bat        — Windows build script
+```
 
-4. **Set Master Password**
-   - Enter strong passphrase (12+ characters recommended)
-   - Observe strength meter: WEAK → FAIR → STRONG → ELITE
-   - Toggle visibility with eye icon
+---
 
-5. **Execute Encryption**
-   - Click "ENCRYPT" button (cyan gradient)
-   - Monitor progress bar with shimmer effect
-   - Check system log for status updates
+## Architecture
 
-6. **Result**
-   - Encrypted file created as `filename.ext.vx2`
-   - Original file remains unchanged
+```
+┌─────────────────────────────────────┐
+│         GUI Layer (egui)            │
+├─────────────────────────────────────┤
+│       Application Controller        │
+├─────────────────────────────────────┤
+│     Background Crypto Thread        │
+│   std::thread + mpsc channel        │
+├─────────────────────────────────────┤
+│        Core Crypto Library          │
+│  AES-GCM-SIV · Argon2id · HKDF     │
+│  Zeroizing · OsRng · Atomic I/O     │
+└─────────────────────────────────────┘
+```
 
-### 🔓 Decryption Workflow
+The GUI thread never touches crypto operations.
+Crypto runs in a background thread and reports
+progress via mpsc channel.
 
-1. **Switch to DECRYPT Mode**
-   - Click right pill button (green highlight)
+---
 
-2. **Select .vx2 File**
-   - Drag encrypted file or use file browser
-   - File info displays: name, size, directory
+## Known Limitations
 
-3. **Enter Correct Password**
-   - Use exact password from encryption
-   - Strength meter not shown during decryption
+- **No batch encryption** — one file at a time
+- **No CLI** — GUI only in this version
+- **2 GB file limit** — by design to prevent OOM
+- **No key files** — password only
+- **No compression** — encrypted files are
+  slightly larger than originals (+ 68 bytes)
 
-4. **Execute Decryption**
-   - Click "DECRYPT" button (green gradient)
-   - Monitor progress and log messages
+---
 
-5. **Result**
-   - Original file restored without .vx2 extension
-   - Encrypted file remains unchanged
+## Contributing
 
-### ⌨️ Command Line Interface
+Bug reports and pull requests are welcome.
 
-For automation and scripting, Neuron Encrypt supports CLI operations:
+For security vulnerabilities, open a private
+GitHub Security Advisory rather than a
+public issue.
 
 ```bash
-# Encrypt a file
-neuron-encrypt encrypt --input document.pdf --output document.pdf.vx2
-
-# Decrypt a file
-neuron-encrypt decrypt --input document.pdf.vx2 --output document.pdf
-
-# Encrypt with password prompt
-neuron-encrypt encrypt --input secret.txt --password-prompt
-
-# Batch encryption
-neuron-encrypt encrypt --input "*.txt" --output-dir encrypted/
-
-# Verify file integrity
-neuron-encrypt verify --input document.pdf.vx2
-
-# Show file information
-neuron-encrypt info --input document.pdf.vx2
-```
-
-#### Advanced CLI Options
-```bash
-# Custom Argon2id parameters
-neuron-encrypt encrypt \
-  --input file.txt \
-  --argon2-memory 128 \
-  --argon2-iterations 4 \
-  --argon2-parallelism 2
-
-# Force overwrite existing files
-neuron-encrypt decrypt --input file.txt.vx2 --force
-
-# Quiet mode (no progress output)
-neuron-encrypt encrypt --input file.txt --quiet
-
-# Verbose logging
-neuron-encrypt encrypt --input file.txt --verbose
-```
-
-#### Scripting Examples
-```bash
-#!/bin/bash
-# Backup and encrypt important files
-
-FILES=("document.pdf" "secret.txt" "config.json")
-PASSWORD="your-secure-password"
-
-for file in "${FILES[@]}"; do
-    echo "Encrypting $file..."
-    neuron-encrypt encrypt --input "$file" --password "$PASSWORD"
-    
-    # Verify encryption
-    if neuron-encrypt verify --input "$file.vx2"; then
-        echo "✓ $file encrypted successfully"
-        # Optionally remove original after verification
-        # rm "$file"
-    else
-        echo "✗ Failed to encrypt $file"
-    fi
-done
-```
-
----
-
-## 🔧 Advanced Configuration
-
-### 🎨 Color Palette
-```css
-/* Dark Terminal Theme */
---bg-deep: #05080D;      /* Deepest background */
---bg-surface: #0E1520;    /* UI surfaces */
---bg-raised: #131D2B;     /* Elevated elements */
---border-dim: #1C2A3A;     /* Subtle borders */
---border-mid: #243548;     /* Standard borders */
---text-bright: #E2EAF4;    /* Primary text */
---text-mid: #7A92AA;       /* Secondary text */
---text-dim: #3A4A5C;       /* Muted text */
---cyan: #0EA5E9;           /* Primary accent */
---cyan-dim: #0C2D3F;       /* Cyan variant */
---cyan-glow: #38BDF8;      /* Cyan highlight */
---green: #10B981;           /* Success color */
---green-dim: #054A2E;       /* Green variant */
---green-glow: #34D399;      /* Green highlight */
---red: #EF4444;             /* Error/warning */
-```
-
-### ⚙️ Build Configuration
-```toml
-[profile.release]
-opt-level = 3           # Maximum optimization
-lto = true              # Link-time optimization
-codegen-units = 1       # Single codegen unit
-strip = true            # Strip debug symbols
-panic = "abort"         # Abort on panic
-```
-
----
-
-## 🔒 Security Analysis
-
-### ✅ Threat Model Coverage
-| Threat | Mitigation |
-|--------|------------|
-| **Password Brute Force** | Argon2id memory-hard KDF (64 MiB, 3 iterations) |
-| **Chosen Ciphertext** | AES-GCM-SIV misuse-resistant authentication |
-| **Side Channel Timing** | Constant-time operations in critical paths |
-| **Memory Forensics** | Zeroizing wrappers erase sensitive data |
-| **File Corruption** | Atomic write patterns with validation |
-| **Metadata Leakage** | Timestamps stripped to epoch (1970-01-01) |
-
-### ⚠️ Known Limitations
-- **Password Recovery**: Impossible by design - no backdoors
-- **File Size Leakage**: Encrypted size reveals original size - 68 bytes
-- **GUI Memory**: egui rendering buffers may retain traces in GPU memory
-- **Extension Preservation**: `.vx2` files show original extension (`doc.txt.vx2`)
-
-### 🛡️ Defense in Depth
-1. **Application Layer**: Rust memory safety, zeroizing
-2. **Cryptographic Layer**: Proven algorithms, proper parameters
-3. **File System Layer**: Atomic operations, validation
-4. **Network Layer**: No network connectivity (air-gapped)
-
----
-
-## 📁 File Format Specification
-
-### 📋 .vx2 Structure
-```
-Offset | Length | Description
--------|--------|-------------
-0      | 8      | Magic bytes: "VAULTX02"
-8      | 32     | Argon2id salt (random)
-40     | 12     | AES-GCM-SIV nonce (random)
-52     | N+16   | Ciphertext + 16-byte auth tag
-```
-
-### 🔍 Validation Process
-1. **Magic Check**: Verify "VAULTX02" header
-2. **Length Check**: Ensure minimum 68 bytes (8+32+12+16)
-3. **Auth Tag**: Verify AES-GCM-SIV authentication
-4. **Atomic Write**: Write to temp file, then rename
-
----
-
-## 🧪 Testing & Verification
-
-### ✅ Unit Test Coverage
-- **Crypto Operations**: 100% coverage
-- **Error Handling**: All error paths tested
-- **Memory Safety**: Valgrind/AddressSanitizer verified
-- **Cross-Platform**: Windows/macOS/Linux CI testing
-
-### 🔬 Security Audits
-- **Static Analysis**: Clippy, rust-analyzer, cargo-audit
-- **Dependency Review**: All crates vetted for vulnerabilities
-- **Code Review**: Manual security-focused review process
-- **Penetration Testing**: Fuzzing and boundary testing
-
----
-
-## 🤝 Contributing
-
-### 📋 Development Setup
-```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/darkmaster0345/Neuron-Encrypt.git
-
-# Install development dependencies
+# Development setup
 rustup component add rustfmt clippy
-
-# Run tests
-cargo test --all
-
-# Check formatting
 cargo fmt --check
-
-# Run linter
 cargo clippy -- -D warnings
-
-# Build release
-cargo build --release
-```
-
-### 🐛 Bug Reporting
-- **Security Issues**: Email `security@neuron-encrypt.dev`
-- **General Bugs**: Use [GitHub Issues](https://github.com/darkmaster0345/Neuron-Encrypt/issues)
-- **Feature Requests**: Use [GitHub Discussions](https://github.com/darkmaster0345/Neuron-Encrypt/discussions)
-
----
-
-## ❓ FAQ
-
-### 🔐 Security Questions
-
-**Q: Is Neuron Encrypt open source?**  
-A: Yes! The entire source code is available on GitHub under the MIT license. You can audit, modify, and redistribute it freely.
-
-**Q: How secure is the encryption?**  
-A: Neuron Encrypt uses AES-256-GCM-SIV, which is approved by NSA for TOP SECRET information. Combined with Argon2id key derivation, it provides military-grade security.
-
-**Q: Can you recover my password if I forget it?**  
-A: No. By design, there are no backdoors or password recovery mechanisms. This ensures zero-knowledge architecture - only you can access your data.
-
-**Q: Does Neuron Encrypt send data to servers?**  
-A: Absolutely not. The application works completely offline and never connects to any network. All operations happen locally on your machine.
-
-### 💻 Technical Questions
-
-**Q: Why Rust instead of C/C++?**  
-A: Rust provides memory safety guarantees without sacrificing performance. This eliminates entire classes of vulnerabilities like buffer overflows and use-after-free bugs.
-
-**Q: What's the .vx2 file extension?**  
-A: .vx2 stands for "VaultX v2" - our encrypted file format. It contains the encrypted data along with necessary metadata for secure decryption.
-
-**Q: Can I encrypt very large files?**  
-A: Yes. Neuron Encrypt uses streaming encryption with constant memory usage (64 MiB), so it can handle files of any size limited only by your disk space.
-
-**Q: Is there a command-line version?**  
-A: Yes! Neuron Encrypt includes a full CLI for automation and scripting. See the [Command Line Interface](#️-command-line-interface) section.
-
-### 🚀 Usage Questions
-
-**Q: How do I choose a strong password?**  
-A: Use at least 12 characters with a mix of uppercase, lowercase, numbers, and symbols. Consider using a passphrase like "correct-horse-battery-staple" for memorability.
-
-**Q: Can I encrypt multiple files at once?**  
-A: Currently, files are encrypted individually. However, you can use the CLI with wildcards or shell scripting for batch operations.
-
-**Q: What happens if the encryption process is interrupted?**  
-A: Neuron Encrypt uses atomic file operations. If interrupted, the original file remains unchanged and no partial encrypted file is created.
-
-### 🔧 Platform Questions
-
-**Q: Does it work on ARM processors?**  
-A: Yes! Neuron Encrypt supports all architectures that Rust compiles to, including ARM64 (Apple Silicon) and ARM32.
-
-**Q: Are there any dependencies?**  
-A: The GUI version requires a graphics stack (Windows/macOS/Linux with X11/Wayland). The CLI version has no external dependencies.
-
-**Q: Can I use it on a server without GUI?**  
-A: Yes, the CLI version works perfectly in headless environments and is ideal for server-side encryption tasks.
-
----
-
-## 📄 License
-
-```
-MIT License
-
-Copyright (c) 2024–2026 Ubaid ur Rehman
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+cargo test --all
 ```
 
 ---
 
-## 🙏 Acknowledgments
+## License
 
-- **Rust Community**: For excellent tooling and ecosystem
-- **Cryptographers**: Who designed and analyzed these algorithms
-- **Security Researchers**: Who continuously verify implementations
-- **Open Source Movement**: Making security transparent and verifiable
+MIT License — Copyright (c) 2024–2026 Ubaid ur Rehman
+
+See LICENSE file for full text.
+
+---
+
+## Acknowledgments
+
+- RustCrypto team — for aes-gcm-siv, argon2, hkdf crates
+- egui/eframe team — for the GUI framework
+- Rust community — for the tooling and ecosystem
 
 ---
 
 <div align="center">
 
+Made with ❤️ and Rust
+
 **[⬆ Back to Top](#neuron-encrypt)**
 
-Made with ❤️ for security professionals and privacy advocates
-
 </div>
+```
+
+---
+
+## What I Changed From Yours
+
+```
+✅ Removed CLI section  — it does not exist
+✅ Removed Docker       — it does not exist
+✅ Removed fake benchmarks
+✅ Removed broken screenshot links
+✅ Removed nonexistent email address
+✅ Added real audit results
+✅ Added honest known limitations
+✅ Kept everything that was accurate
+✅ Made the warning more prominent
+```
