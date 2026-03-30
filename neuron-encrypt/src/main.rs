@@ -2,19 +2,16 @@
 
 // main.rs — eframe entry point
 // Neuron Encrypt — AES-256-GCM-SIV · Argon2id · HKDF-SHA512
-// Custom title bar + JetBrains Mono font embedding
 
 mod gui;
 
 fn main() -> eframe::Result<()> {
-    // Window options with platform-specific decorations
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("Neuron Encrypt")
-        .with_inner_size(eframe::egui::vec2(700.0, 820.0))
+        .with_inner_size(eframe::egui::vec2(660.0, 580.0))
         .with_resizable(false)
         .with_maximize_button(false);
 
-    // Platform-specific title bar settings
     #[cfg(not(target_os = "macos"))]
     {
         viewport = viewport.with_decorations(false);
@@ -37,22 +34,25 @@ fn main() -> eframe::Result<()> {
         "Neuron Encrypt",
         options,
         Box::new(|cc| {
-            // Load and register JetBrains Mono font
+            // Load JetBrains Mono for monospace only
             let font_data = eframe::egui::FontData::from_static(include_bytes!(
                 "../assets/fonts/JetBrainsMono-Regular.ttf"
             ));
 
             let mut fonts = eframe::egui::FontDefinitions::default();
-            fonts.font_data.insert("JetBrainsMono".to_owned(), font_data);
+            fonts
+                .font_data
+                .insert("JetBrainsMono".to_owned(), font_data);
 
-            // Set as primary monospace font
+            // Set as primary monospace font (used for log line and tech labels)
             fonts
                 .families
                 .entry(eframe::egui::FontFamily::Monospace)
                 .or_default()
                 .insert(0, "JetBrainsMono".to_owned());
 
-            // Set as default proportional font fallback
+            // Add as fallback for proportional (for glyph coverage), but keep
+            // the system default proportional font as primary
             fonts
                 .families
                 .entry(eframe::egui::FontFamily::Proportional)
@@ -61,7 +61,7 @@ fn main() -> eframe::Result<()> {
 
             cc.egui_ctx.set_fonts(fonts);
 
-            // Apply custom visuals
+            // Apply clean minimal theme
             apply_custom_theme(&cc.egui_ctx);
 
             Box::new(gui::NeuronEncryptApp::new(cc))
@@ -72,33 +72,62 @@ fn main() -> eframe::Result<()> {
 fn apply_custom_theme(ctx: &eframe::egui::Context) {
     let mut visuals = eframe::egui::Visuals::dark();
 
-    // Override all default colors with our palette
-    visuals.panel_fill = eframe::egui::Color32::from_rgb(0x05, 0x08, 0x0D);
-    visuals.window_fill = eframe::egui::Color32::from_rgb(0x0E, 0x15, 0x20);
-    visuals.faint_bg_color = eframe::egui::Color32::from_rgb(0x09, 0x0E, 0x15);
-    visuals.extreme_bg_color = eframe::egui::Color32::from_rgb(0x05, 0x08, 0x0D);
+    // Background colors
+    visuals.panel_fill = eframe::egui::Color32::from_rgb(0x0F, 0x0F, 0x0F);
+    visuals.window_fill = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    visuals.faint_bg_color = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    visuals.extreme_bg_color = eframe::egui::Color32::from_rgb(0x0F, 0x0F, 0x0F);
 
-    // Widget styling - make everything minimal
-    visuals.widgets.noninteractive.bg_fill = eframe::egui::Color32::from_rgb(0x0E, 0x15, 0x20);
-    visuals.widgets.noninteractive.fg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0xE2, 0xEA, 0xF4));
-    visuals.widgets.noninteractive.bg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x1C, 0x2A, 0x3A));
+    // Widget styling
+    visuals.widgets.noninteractive.bg_fill =
+        eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    visuals.widgets.noninteractive.fg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0xF5, 0xF5, 0xF5),
+    );
+    visuals.widgets.noninteractive.bg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A),
+    );
 
-    visuals.widgets.inactive.bg_fill = eframe::egui::Color32::from_rgb(0x13, 0x1D, 0x2B);
-    visuals.widgets.inactive.fg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x7A, 0x92, 0xAA));
-    visuals.widgets.inactive.bg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x24, 0x35, 0x48));
+    visuals.widgets.inactive.bg_fill = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    visuals.widgets.inactive.fg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0xA0, 0xA0, 0xA0),
+    );
+    visuals.widgets.inactive.bg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A),
+    );
 
-    visuals.widgets.hovered.bg_fill = eframe::egui::Color32::from_rgb(0x1C, 0x2A, 0x3A);
-    visuals.widgets.hovered.fg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x0E, 0xA5, 0xE9));
-    visuals.widgets.hovered.bg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x38, 0xBD, 0xF8));
+    visuals.widgets.hovered.bg_fill = eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
+    visuals.widgets.hovered.fg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
+    );
+    visuals.widgets.hovered.bg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
+    );
 
-    visuals.widgets.active.bg_fill = eframe::egui::Color32::from_rgb(0x0C, 0x2D, 0x3F);
-    visuals.widgets.active.fg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x10, 0xB9, 0x81));
-    visuals.widgets.active.bg_stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x34, 0xD3, 0x99));
+    visuals.widgets.active.bg_fill = eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
+    visuals.widgets.active.fg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
+    );
+    visuals.widgets.active.bg_stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x8B, 0x5C, 0xF6),
+    );
 
-    visuals.selection.bg_fill = eframe::egui::Color32::from_rgba_premultiplied(0x0E, 0xA5, 0xE9, 40);
-    visuals.selection.stroke = eframe::egui::Stroke::new(1.0, eframe::egui::Color32::from_rgb(0x0E, 0xA5, 0xE9));
+    visuals.selection.bg_fill =
+        eframe::egui::Color32::from_rgba_premultiplied(0x63, 0x66, 0xF1, 40);
+    visuals.selection.stroke = eframe::egui::Stroke::new(
+        1.0,
+        eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
+    );
 
-    visuals.override_text_color = Some(eframe::egui::Color32::from_rgb(0xE2, 0xEA, 0xF4));
+    visuals.override_text_color = Some(eframe::egui::Color32::from_rgb(0xF5, 0xF5, 0xF5));
 
     ctx.set_visuals(visuals);
 }

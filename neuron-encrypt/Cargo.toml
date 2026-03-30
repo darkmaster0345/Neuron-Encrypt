@@ -26,6 +26,9 @@ rfd         = "0.14"
 thiserror   = "1.0"
 chrono      = "0.4"
 
+[lints.clippy]
+explicit_auto_deref = "allow"
+
 [profile.release]
 opt-level     = 3
 lto           = true

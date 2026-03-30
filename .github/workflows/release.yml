@@ -74,3 +74,42 @@ jobs:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
           retention-days: 30
+
+  build-installer:
+    name: Build Windows Installer
+    runs-on: windows-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: NeuronEncrypt-Windows.exe
+          path: .
+
+      - name: Prepare installer input
+        shell: bash
+        run: |
+          mkdir -p neuron-encrypt/target/x86_64-pc-windows-msvc/release
+          cp NeuronEncrypt-Windows.exe neuron-encrypt/target/x86_64-pc-windows-msvc/release/neuron-encrypt.exe
+
+      - name: Install NSIS
+        run: choco install nsis --yes
+
+      - name: Build installer
+        run: makensis installer/neuron-encrypt.nsi
+
+      - name: Upload portable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeuronEncrypt-Windows-x64-Portable.exe
+          path: NeuronEncrypt-Windows.exe
+          retention-days: 30
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NeuronEncrypt-Windows-x64-Setup.exe
+          path: installer/NeuronEncrypt-Windows-x64-Setup.exe
+          retention-days: 30
