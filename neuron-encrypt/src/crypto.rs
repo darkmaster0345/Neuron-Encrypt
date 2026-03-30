@@ -38,6 +38,13 @@ pub const EXTENSION: &str = ".vx2";
 /// so we cap at 2 GB which is safe on modern 64-bit systems.
 const MAX_FILE_SIZE: u64 = 2_000_000_000;
 
+// BUG-16 note: AES-GCM-SIV has no padding, so ciphertext length == plaintext
+// length. An attacker can compute original_size = encrypted_size - 68 bytes.
+// To mitigate, consider adding optional random padding (0-4096 bytes) appended
+// before encryption, with the padding length stored in the last 2 bytes of
+// plaintext. This would require a file format version bump (VAULTX03) and is
+// deferred to avoid breaking backward compatibility with existing .vx2 files.
+
 // ── Progress callback trait ────────────────────────────────────
 // Platform-agnostic: the caller decides how to handle progress.
 // On Windows GUI: the impl sends messages via mpsc.
@@ -55,27 +62,34 @@ impl ProgressReporter for NoopReporter {
 
 /// A throttled wrapper that only forwards when progress changes by ≥1%.
 /// Ensures at most ~100 updates per operation.
+///
+/// BUG-13 fix: Uses AtomicU32 instead of Cell<f32> so the type is Sync-safe
+/// for potential multi-threaded FFI usage (Android NDK, iOS Swift).
 pub struct ThrottledReporter<R: ProgressReporter> {
     inner: R,
-    last_reported: std::cell::Cell<f32>,
+    last_reported: std::sync::atomic::AtomicU32,
 }
 
 impl<R: ProgressReporter> ThrottledReporter<R> {
     pub fn new(inner: R) -> Self {
         Self {
             inner,
-            last_reported: std::cell::Cell::new(-1.0),
+            // Store f32 bits; -1.0f32 as bits signals "no report yet"
+            last_reported: std::sync::atomic::AtomicU32::new((-1.0f32).to_bits()),
         }
     }
 }
 
 impl<R: ProgressReporter> ProgressReporter for ThrottledReporter<R> {
     fn report(&self, progress: f32, message: &str) {
-        let last = self.last_reported.get();
+        let last = f32::from_bits(
+            self.last_reported.load(std::sync::atomic::Ordering::Relaxed),
+        );
         // Always forward the very first and very last updates,
         // plus any update that moves ≥0.01 (1%) from the last.
         if last < 0.0 || progress >= 1.0 || (progress - last) >= 0.01 {
-            self.last_reported.set(progress);
+            self.last_reported
+                .store(progress.to_bits(), std::sync::atomic::Ordering::Relaxed);
             self.inner.report(progress, message);
         }
     }
@@ -186,17 +200,27 @@ fn tmp_path(dest: &Path) -> PathBuf {
 pub fn encrypt_file(
     src: &Path,
     dest: &Path,
-    password: &Zeroizing<String>,
+    password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
+    // BUG-04 fix: Read the file first, then validate in-memory size.
+    // This eliminates the TOCTOU race between metadata check and fs::read.
+    reporter.report(0.10, "Reading source file…");
+    let plaintext = Zeroizing::new(fs::read(src)?);
+    let source_len = plaintext.len() as u64;
+
     // ── Validate file size (OOM protection) ──
-    let src_meta = fs::metadata(src)?;
-    if src_meta.len() > MAX_FILE_SIZE {
-        return Err(CryptoError::EncryptionFailed(format!(
-            "File too large ({:.1} GB). Maximum supported size is {:.1} GB to avoid memory exhaustion.",
-            src_meta.len() as f64 / 1_000_000_000.0,
-            MAX_FILE_SIZE as f64 / 1_000_000_000.0,
-        )));
+    // BUG-07 fix: Use dedicated FileTooLarge error variant.
+    if source_len > MAX_FILE_SIZE {
+        return Err(CryptoError::FileTooLarge {
+            size_gb: source_len as f64 / 1_000_000_000.0,
+            max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
+        });
+    }
+
+    // BUG-12 fix: Check if destination exists before proceeding.
+    if dest.exists() {
+        return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
     }
 
     // Generate random salt and nonce via OsRng
@@ -206,12 +230,11 @@ pub fn encrypt_file(
     OsRng.fill_bytes(&mut nonce_bytes);
 
     // Derive key
-    reporter.report(0.10, "Deriving encryption key (Argon2id)…");
-    let key = derive_key(password.as_bytes(), &salt)?;
-
-    reporter.report(0.30, "Reading source file…");
-    let plaintext = Zeroizing::new(fs::read(src)?);
-    let source_len = plaintext.len() as u64;
+    // BUG-15 note: Key material is Zeroizing but not mlock'd. To prevent
+    // the OS from swapping key pages to disk, integrate memsec or seckey
+    // crate for mlock after allocation in a future hardening pass.
+    reporter.report(0.20, "Deriving encryption key (Argon2id)…");
+    let key = derive_key(password, &salt)?;
 
     // Encrypt
     reporter.report(0.50, "Encrypting data (AES-256-GCM-SIV)…");
@@ -258,10 +281,9 @@ pub fn encrypt_file(
         return Err(CryptoError::Io(e));
     }
 
-    // Strip timestamps to reduce metadata leakage
-    #[cfg(windows)]
+    // BUG-17 fix: Strip timestamps on all platforms (not just Windows)
+    // to reduce metadata leakage about when encryption occurred.
     {
-        // Set creation/modified/accessed times to Unix epoch
         if let Ok(f) = std::fs::OpenOptions::new()
             .write(true)
             .open(dest)
@@ -289,28 +311,32 @@ pub fn encrypt_file(
 pub fn decrypt_file(
     src: &Path,
     dest: &Path,
-    password: &Zeroizing<String>,
+    password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
-    // ── Validate file size (OOM protection) ──
-    let src_meta = fs::metadata(src)?;
-    if src_meta.len() > MAX_FILE_SIZE + HEADER_LEN as u64 + TAG_LEN as u64 {
-        return Err(CryptoError::EncryptionFailed(format!(
-            "File too large ({:.1} GB). Maximum supported size is ~{:.1} GB.",
-            src_meta.len() as f64 / 1_000_000_000.0,
-            MAX_FILE_SIZE as f64 / 1_000_000_000.0,
-        )));
+    // BUG-12 fix: Check if destination exists before proceeding.
+    if dest.exists() {
+        return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
     }
 
     reporter.report(0.05, "Reading encrypted file…");
     let raw = fs::read(src)?;
+
+    // BUG-07 fix: Use dedicated FileTooLarge error variant for decrypt path.
+    let max_encrypted = MAX_FILE_SIZE + HEADER_LEN as u64 + TAG_LEN as u64;
+    if raw.len() as u64 > max_encrypted {
+        return Err(CryptoError::FileTooLarge {
+            size_gb: raw.len() as f64 / 1_000_000_000.0,
+            max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
+        });
+    }
 
     // Parse header at exact offsets
     let (salt, nonce_bytes, ct) = parse_header(&raw)?;
 
     // Derive key
     reporter.report(0.20, "Deriving decryption key (Argon2id)…");
-    let key = derive_key(password.as_bytes(), salt)?;
+    let key = derive_key(password, salt)?;
 
     // Decrypt
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)…");
