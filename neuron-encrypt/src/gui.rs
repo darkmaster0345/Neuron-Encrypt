@@ -117,7 +117,10 @@ fn evaluate_strength(pw: &str) -> (Strength, usize) {
     };
 
     let level = match score {
-        0..=2  => Strength::Weak,
+        // BUG-09 fix: score 0 is unreachable because empty passwords return
+        // early at line 90-91 and the match arms above start at 1.
+        0 => unreachable!("score 0 cannot occur: empty passwords return early"),
+        1..=2  => Strength::Weak,
         3..=4  => Strength::Fair,
         5..=7  => Strength::Strong,
         _      => Strength::Elite,
@@ -266,8 +269,15 @@ impl NeuronEncryptApp {
             }
         }
 
-        // Request 60fps repaint
-        ctx.request_repaint_after(Duration::from_millis(16));
+        // BUG-18 fix: Use 500ms repaint during idle (hex at 1 RPM + clock don't
+        // need 60 FPS). Switch to 16ms only during active processing or pulse
+        // animations to save CPU/GPU and battery.
+        let repaint_interval = if self.is_processing || self.hex_pulse_start.is_some() {
+            Duration::from_millis(16) // 60 FPS during active animation
+        } else {
+            Duration::from_millis(500) // ~2 FPS during idle
+        };
+        ctx.request_repaint_after(repaint_interval);
     }
 
     fn trigger_hex_pulse(&mut self) {
@@ -328,7 +338,10 @@ impl NeuronEncryptApp {
         self.is_processing = true;
         self.progress = 0.0;
 
-        let pw = self.password.clone();
+        // BUG-14 fix: Extract password bytes into a Zeroizing<Vec<u8>> instead of
+        // cloning the Zeroizing<String>. This avoids creating a second plaintext
+        // String copy in memory. The byte buffer is consumed by the crypto thread.
+        let pw_bytes = Zeroizing::new(self.password.as_bytes().to_vec());
         let mode = self.mode;
         let ctx_clone = ctx.clone();
 
@@ -345,8 +358,8 @@ impl NeuronEncryptApp {
         std::thread::spawn(move || {
             let reporter = ThrottledReporter::new(MpscReporter { tx });
             let result = match mode {
-                Mode::Encrypt => crypto::encrypt_file(&path, &dest_path, &pw, &reporter),
-                Mode::Decrypt => crypto::decrypt_file(&path, &dest_path, &pw, &reporter),
+                Mode::Encrypt => crypto::encrypt_file(&path, &dest_path, &pw_bytes, &reporter),
+                Mode::Decrypt => crypto::decrypt_file(&path, &dest_path, &pw_bytes, &reporter),
             };
             match result {
                 Ok(_) => { let _ = tx_done.send(GuiMsg::Done("Operation complete.".into())); }
@@ -374,6 +387,8 @@ impl NeuronEncryptApp {
                     self.progress = 1.0;
                     self.log(&text, Palette::GREEN);
                     self.is_processing = false;
+                    // BUG-11 fix: Clean up dead channel after final message.
+                    self.crypto_rx = None;
                     self.trigger_hex_pulse();
                     ctx.request_repaint();
                 }
@@ -381,6 +396,8 @@ impl NeuronEncryptApp {
                     self.progress = 0.0;
                     self.log(&format!("ERROR: {}", text), Palette::RED);
                     self.is_processing = false;
+                    // BUG-11 fix: Clean up dead channel after final message.
+                    self.crypto_rx = None;
                     ctx.request_repaint();
                 }
             }
@@ -518,6 +535,7 @@ impl NeuronEncryptApp {
     }
 
     // Layer 2: Custom title bar for Windows/Linux
+    // BUG-01 fix: Use ctx.send_viewport_cmd() for close/minimize/drag.
     #[cfg(not(target_os = "macos"))]
     fn draw_custom_title_bar(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let title_height = 36.0;
@@ -585,7 +603,7 @@ impl NeuronEncryptApp {
         let min_color = if min_resp.hovered() { Palette::TEXT_MID } else { Palette::TEXT_DIM };
         ui.painter().circle_filled(min_rect.center(), btn_size/2.0, min_color);
         if min_resp.clicked() {
-            // Minimize not available in eframe 0.27
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
 
         // Maximize button (disabled)
@@ -598,11 +616,14 @@ impl NeuronEncryptApp {
         let close_color = if close_resp.hovered() { Palette::RED } else { Palette::TEXT_DIM };
         ui.painter().circle_filled(close_rect.center(), btn_size/2.0, close_color);
         if close_resp.clicked() {
-            // Close not directly available - user can use OS close
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
-        // Handle drag to move window - drag_window not available in 0.27
-        let _drag_area = title_rect;
+        // Handle drag to move window via viewport command
+        let drag_resp = ui.interact(title_rect, egui::Id::new("title_drag"), egui::Sense::drag());
+        if drag_resp.drag_started() {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
     }
 
     fn draw_small_hexagon(&self, ui: &mut egui::Ui, center: egui::Pos2, radius: f32, color: egui::Color32) {
@@ -728,14 +749,21 @@ impl NeuronEncryptApp {
         let line_left = section_rect.min.x + 20.0;
         let line_right = section_rect.max.x - 20.0;
 
-        // Draw gradient line
-        for x in (line_left as i32)..=(line_right as i32) {
-            let t = (x as f32 - line_left) / (line_right - line_left);
-            let alpha = ((1.0 - t) * 255.0) as u8;
-            ui.painter().line_segment(
-                [egui::pos2(x as f32, line_y), egui::pos2((x + 1) as f32, line_y)],
-                egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(0x0E, 0xA5, 0xE9, alpha)),
-            );
+        // BUG-05 fix: Guard against division by zero when line_right <= line_left.
+        // BUG-06 fix: Batch into ~10 color segments instead of per-pixel draw calls.
+        if line_right > line_left {
+            let num_segments = 10;
+            let segment_width = (line_right - line_left) / num_segments as f32;
+            for i in 0..num_segments {
+                let x_start = line_left + segment_width * i as f32;
+                let x_end = line_left + segment_width * (i + 1) as f32;
+                let t = (i as f32 + 0.5) / num_segments as f32; // midpoint of segment
+                let alpha = ((1.0 - t) * 255.0) as u8;
+                ui.painter().line_segment(
+                    [egui::pos2(x_start, line_y), egui::pos2(x_end, line_y)],
+                    egui::Stroke::new(1.0, egui::Color32::from_rgba_premultiplied(0x0E, 0xA5, 0xE9, alpha)),
+                );
+            }
         }
     }
 
@@ -832,18 +860,17 @@ impl NeuronEncryptApp {
             let stroke = egui::Stroke::new(1.5, Palette::BORDER_MID);
             ui.painter().rect_stroke(zone_rect, 8.0, stroke);
 
-            // Plus icon
+            // BUG-03 fix: Plus icon was rendering an empty string.
             let center = zone_rect.center();
             ui.painter().text(
                 egui::pos2(center.x, center.y - 10.0),
                 egui::Align2::CENTER_CENTER,
-                "",
+                "+",
                 egui::FontId::new(20.0, egui::FontFamily::Monospace),
                 Palette::TEXT_DIM,
             );
 
-            // Drop text + browse link
-            let _text = "Drop file here  or  ";
+            // BUG-08 fix: Removed unused _text variable.
             let text_width = 100.0; // approximate
             let browse_x = center.x + text_width / 2.0;
 
@@ -934,11 +961,12 @@ impl NeuronEncryptApp {
             );
             let clear_resp = ui.interact(clear_rect, egui::Id::new("clear_btn"), egui::Sense::click());
 
+            // BUG-03 fix: X/clear button was rendering an empty string.
             let clear_color = if clear_resp.hovered() { Palette::TEXT_MID } else { Palette::TEXT_DIM };
             ui.painter().text(
                 clear_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "",
+                "\u{2715}", // ✕ multiplication sign
                 egui::FontId::new(16.0, egui::FontFamily::Monospace),
                 clear_color,
             );
@@ -978,11 +1006,11 @@ impl NeuronEncryptApp {
         ui.painter().rect_filled(input_rect, 6.0, Palette::BG_RAISED);
         ui.painter().rect_stroke(input_rect, 6.0, egui::Stroke::new(1.0, border_color));
 
-        // Lock icon
+        // BUG-03 fix: Lock icon was rendering an empty string.
         ui.painter().text(
             egui::pos2(input_rect.min.x + 12.0, input_rect.center().y),
             egui::Align2::LEFT_CENTER,
-            "",
+            "\u{1F512}", // 🔒 lock
             egui::FontId::new(14.0, egui::FontFamily::Monospace),
             Palette::TEXT_DIM,
         );
@@ -994,7 +1022,8 @@ impl NeuronEncryptApp {
         );
         let eye_resp = ui.interact(eye_rect, egui::Id::new("eye_btn"), egui::Sense::click());
 
-        let eye_text = if self.show_password { "" } else { "" };
+        // BUG-02 fix: Both states were empty strings. Use Unicode eye symbols.
+        let eye_text = if self.show_password { "\u{1F441}" } else { "\u{2014}" }; // 👁 vs —
         ui.painter().text(
             eye_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -1003,7 +1032,8 @@ impl NeuronEncryptApp {
             Palette::TEXT_DIM,
         );
 
-        if eye_resp.clicked() {
+        // BUG-10 fix: Disable eye toggle during active crypto operation.
+        if eye_resp.clicked() && !self.is_processing {
             self.show_password = !self.show_password;
         }
 

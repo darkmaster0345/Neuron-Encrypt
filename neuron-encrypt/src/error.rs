@@ -24,6 +24,14 @@ pub enum CryptoError {
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
 
+    /// BUG-07: Dedicated variant for file-too-large errors in both encrypt and decrypt paths.
+    #[error("File too large ({size_gb:.1} GB). Maximum supported size is ~{max_gb:.1} GB.")]
+    FileTooLarge { size_gb: f64, max_gb: f64 },
+
+    /// BUG-12: Destination file already exists — GUI should prompt for confirmation.
+    #[error("Destination file already exists: {0}")]
+    FileAlreadyExists(std::path::PathBuf),
+
     #[error("Write incomplete. Disk full? Expected {expected} bytes, got {actual}")]
     SizeMismatch { expected: u64, actual: u64 },
 
