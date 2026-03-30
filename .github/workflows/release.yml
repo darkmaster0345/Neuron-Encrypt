@@ -95,11 +95,12 @@ jobs:
           cp NeuronEncrypt-Windows.exe neuron-encrypt/target/x86_64-pc-windows-msvc/release/neuron-encrypt.exe
 
       - name: Install NSIS
-        run: choco install nsis --yes
+        run: choco install nsis --yes --no-progress
 
       - name: Build installer
-        run: makensis installer/neuron-encrypt.nsi
-
+        run: |
+          & "C:\Program Files (x86)\NSIS\makensis.exe" installer/neuron-encrypt.nsi
+        shell: pwsh
       - name: Upload portable artifact
         uses: actions/upload-artifact@v4
         with:
