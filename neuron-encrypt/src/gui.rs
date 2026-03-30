@@ -7,7 +7,6 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-// use rand_core::RngCore;
 use zeroize::Zeroizing;
 
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
@@ -577,8 +576,8 @@ impl NeuronEncryptApp {
         ui.painter().text(
             egui::pos2(title_rect.min.x + 125.0, title_rect.center().y),
             egui::Align2::LEFT_CENTER,
-            "  ",
-            egui::FontId::new(12.0, egui::FontFamily::Proportional),
+            "\u{2022}",  // bullet separator
+            egui::FontId::new(8.0, egui::FontFamily::Proportional),
             Palette::TEXT_DIM,
         );
 
@@ -804,11 +803,13 @@ impl NeuronEncryptApp {
             ui.painter().rect_stroke(enc_rect, 999.0, egui::Stroke::new(1.0, Palette::CYAN));
         }
 
-        let enc_text_color = if self.mode == Mode::Encrypt { Palette::CYAN } else { Palette::TEXT_DIM };
+        let enc_text_color = if self.is_processing {
+            if self.mode == Mode::Encrypt { Palette::CYAN.gamma_multiply(0.5) } else { Palette::TEXT_DIM.gamma_multiply(0.4) }
+        } else if self.mode == Mode::Encrypt { Palette::CYAN } else { Palette::TEXT_DIM };
         ui.painter().text(
             enc_rect.center(),
             egui::Align2::CENTER_CENTER,
-            "ENCRYPT",
+            "\u{1F512}  ENCRYPT", // 🔒 ENCRYPT
             egui::FontId::new(13.0, egui::FontFamily::Proportional),
             enc_text_color,
         );
@@ -829,11 +830,13 @@ impl NeuronEncryptApp {
             ui.painter().rect_stroke(dec_rect, 999.0, egui::Stroke::new(1.0, Palette::GREEN));
         }
 
-        let dec_text_color = if self.mode == Mode::Decrypt { Palette::GREEN } else { Palette::TEXT_DIM };
+        let dec_text_color = if self.is_processing {
+            if self.mode == Mode::Decrypt { Palette::GREEN.gamma_multiply(0.5) } else { Palette::TEXT_DIM.gamma_multiply(0.4) }
+        } else if self.mode == Mode::Decrypt { Palette::GREEN } else { Palette::TEXT_DIM };
         ui.painter().text(
             dec_rect.center(),
             egui::Align2::CENTER_CENTER,
-            "DECRYPT",
+            "\u{1F513}  DECRYPT", // 🔓 DECRYPT
             egui::FontId::new(13.0, egui::FontFamily::Proportional),
             dec_text_color,
         );
@@ -915,16 +918,20 @@ impl NeuronEncryptApp {
                 }
             }
         } else {
-            // Selected state
+            // Selected state - show accent border in mode color
+            let accent_color = if self.mode == Mode::Encrypt { Palette::CYAN } else { Palette::GREEN };
+            ui.painter().rect_stroke(zone_rect, 8.0, egui::Stroke::new(1.0, accent_color.gamma_multiply(0.5)));
+
             let path = self.selected_file.as_ref().unwrap();
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
 
-            // File icon (small square)
+            // File icon (small square) - colored by mode
             let icon_rect = egui::Rect::from_min_size(
                 egui::pos2(zone_rect.min.x + 16.0, zone_rect.center().y - 8.0),
                 egui::vec2(16.0, 16.0),
             );
-            ui.painter().rect_filled(icon_rect, 2.0, Palette::CYAN);
+            let file_icon_color = if self.mode == Mode::Encrypt { Palette::CYAN } else { Palette::GREEN };
+            ui.painter().rect_filled(icon_rect, 2.0, file_icon_color);
 
             // Filename
             ui.painter().text(
@@ -1001,18 +1008,21 @@ impl NeuronEncryptApp {
             egui::pos2(section_rect.max.x, section_rect.min.y + 54.0),
         );
 
-        // Input background - no focus tracking, simple border
-        let border_color = Palette::BORDER_DIM;
-        ui.painter().rect_filled(input_rect, 6.0, Palette::BG_RAISED);
+        // Input background - dim border/bg during processing to show disabled state
+        let border_color = if self.is_processing { Palette::BORDER_DIM.gamma_multiply(0.5) } else { Palette::BORDER_DIM };
+        let input_bg = if self.is_processing { Palette::BG_RAISED.gamma_multiply(0.6) } else { Palette::BG_RAISED };
+        ui.painter().rect_filled(input_rect, 6.0, input_bg);
         ui.painter().rect_stroke(input_rect, 6.0, egui::Stroke::new(1.0, border_color));
 
         // BUG-03 fix: Lock icon was rendering an empty string.
+        // Use Proportional font for emoji fallback support across platforms.
+        let lock_color = if self.is_processing { Palette::TEXT_DIM.gamma_multiply(0.4) } else { Palette::TEXT_DIM };
         ui.painter().text(
             egui::pos2(input_rect.min.x + 12.0, input_rect.center().y),
             egui::Align2::LEFT_CENTER,
             "\u{1F512}", // 🔒 lock
-            egui::FontId::new(14.0, egui::FontFamily::Monospace),
-            Palette::TEXT_DIM,
+            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+            lock_color,
         );
 
         // Eye toggle button
@@ -1023,13 +1033,21 @@ impl NeuronEncryptApp {
         let eye_resp = ui.interact(eye_rect, egui::Id::new("eye_btn"), egui::Sense::click());
 
         // BUG-02 fix: Both states were empty strings. Use Unicode eye symbols.
-        let eye_text = if self.show_password { "\u{1F441}" } else { "\u{2014}" }; // 👁 vs —
+        // Use Proportional font for emoji fallback support.
+        let eye_text = if self.show_password { "\u{1F441}" } else { "\u{25CF}" }; // 👁 (visible) vs ● (hidden)
+        let eye_color = if self.is_processing {
+            Palette::TEXT_DIM.gamma_multiply(0.4)
+        } else if eye_resp.hovered() {
+            Palette::TEXT_MID
+        } else {
+            Palette::TEXT_DIM
+        };
         ui.painter().text(
             eye_rect.center(),
             egui::Align2::CENTER_CENTER,
             eye_text,
-            egui::FontId::new(14.0, egui::FontFamily::Monospace),
-            Palette::TEXT_DIM,
+            egui::FontId::new(14.0, egui::FontFamily::Proportional),
+            eye_color,
         );
 
         // BUG-10 fix: Disable eye toggle during active crypto operation.
@@ -1043,11 +1061,14 @@ impl NeuronEncryptApp {
             egui::pos2(input_rect.max.x - 40.0, input_rect.max.y - 4.0),
         );
 
+        // BUG-10 fix: Disable password input during active crypto operation.
         ui.allocate_ui_at_rect(text_edit_rect, |ui| {
             let is_empty = self.password.is_empty();
+            let text_color = if self.is_processing { Palette::TEXT_MID } else { Palette::TEXT_BRIGHT };
             let mut text_edit = egui::TextEdit::singleline(&mut *self.password)
                 .font(egui::FontId::new(14.0, egui::FontFamily::Monospace))
-                .text_color(Palette::TEXT_BRIGHT);
+                .text_color(text_color)
+                .interactive(!self.is_processing);
 
             if !self.show_password {
                 text_edit = text_edit.password(true);
@@ -1307,7 +1328,7 @@ impl NeuronEncryptApp {
         ui.painter().text(
             footer_rect.center(),
             egui::Align2::CENTER_CENTER,
-            "  Passphrase cannot be recovered    Files encrypted with AES-256-GCM-SIV",
+            "\u{26A0} Passphrase cannot be recovered  \u{2022}  Files encrypted with AES-256-GCM-SIV",
             egui::FontId::new(9.0, egui::FontFamily::Proportional),
             Palette::TEXT_DIM,
         );
