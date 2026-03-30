@@ -3,6 +3,7 @@
 ; Builds: makensis installer/neuron-encrypt.nsi
 
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 
 ; ---------------------------------------------------------------------------
 ; General
@@ -17,7 +18,7 @@
 !define VX2_CLASS "NeuronEncrypt.vx2file"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "NeuronEncrypt-Windows-x64-Setup.exe"
+OutFile "${FILEDIR}\NeuronEncrypt-Windows-x64-Setup.exe"
 InstallDir "$PROGRAMFILES64\NeuronEncrypt"
 InstallDirRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation"
 RequestExecutionLevel admin
@@ -106,6 +107,9 @@ Section "Associate .vx2 files with Neuron Encrypt" SEC_ASSOC
     WriteRegStr HKCR "${VX2_CLASS}\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXE}" "%1"'
 
     ; Notify shell of association change
+        ; Record that we own the association
+    WriteRegDWORD HKLM "Software\NeuronEncrypt" "FileAssocInstalled" 1
+
     System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
 SectionEnd
 
@@ -135,12 +139,19 @@ Section "Uninstall"
     ; Remove Desktop shortcut
     Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
 
-    ; Remove .vx2 file association
-    DeleteRegKey HKCR ".vx2"
-    DeleteRegKey HKCR "${VX2_CLASS}"
+    ; Only delete the .vx2 registry keys if we own the association and it still points to us
+    ReadRegDWORD $0 HKLM "Software\NeuronEncrypt" "FileAssocInstalled"
+    ${If} $0 == 1
+        ReadRegStr $1 HKCR ".vx2" ""
+        ${If} $1 == "${VX2_CLASS}"
+            DeleteRegKey HKCR ".vx2"
+            DeleteRegKey HKCR "${VX2_CLASS}"
+            System::Call "shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)"
+        ${EndIf}
+    ${EndIf}
 
-    ; Notify shell of association change
-    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
+    ; Remove our software key
+    DeleteRegKey HKLM "Software\NeuronEncrypt"
 
     ; Remove Uninstall registry entry
     DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"

@@ -384,11 +384,14 @@ impl eframe::App for NeuronEncryptApp {
                 #[cfg(not(target_os = "macos"))]
                 self.draw_title_bar(ui);
 
-                let content_top = if cfg!(target_os = "macos") { 8.0 } else { 40.0 };
-                let available = ui.available_rect_before_wrap();
+                #[cfg(not(target_os = "macos"))]
+                let content_top = 40.0;
+                #[cfg(target_os = "macos")]
+                let content_top = 0.0;
+
                 let content_rect = egui::Rect::from_min_max(
-                    egui::pos2(available.min.x, available.min.y + content_top),
-                    available.max,
+                    egui::pos2(ui.max_rect().min.x, ui.max_rect().min.y + content_top),
+                    ui.max_rect().max,
                 );
 
                 ui.allocate_ui_at_rect(content_rect, |ui| {
@@ -773,10 +776,11 @@ impl NeuronEncryptApp {
             );
 
             // Filename (truncated)
-            let display_name: String = if file_name.len() > 45 {
-                format!("{}...", &file_name[..42])
+            let truncated: String = file_name.chars().take(42).collect();
+            let display_name = if file_name.chars().count() > 42 {
+                format!("{}...", truncated)
             } else {
-                file_name
+                file_name.clone()
             };
             ui.painter().text(
                 egui::pos2(zone_rect.min.x + 52.0, zone_rect.center().y - 8.0),

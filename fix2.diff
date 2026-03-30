@@ -1,0 +1,16 @@
+<<<<<<< SEARCH
+            // Filename (truncated)
+            let display_name: String = if file_name.len() > 45 {
+                format!("{}...", &file_name[..42])
+            } else {
+                file_name
+            };
+=======
+            // Filename (truncated)
+            let truncated: String = file_name.chars().take(42).collect();
+            let display_name = if file_name.chars().count() > 42 {
+                format!("{}...", truncated)
+            } else {
+                file_name.clone()
+            };
+>>>>>>> REPLACE

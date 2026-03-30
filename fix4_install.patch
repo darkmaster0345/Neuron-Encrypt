@@ -1,0 +1,28 @@
+<<<<<<< SEARCH
+    ; Register .vx2 extension
+    WriteRegStr HKCR ".vx2" "" "${VX2_CLASS}"
+
+    ; Register file type
+    WriteRegStr HKCR "${VX2_CLASS}" "" "Neuron Encrypt Encrypted File"
+    WriteRegStr HKCR "${VX2_CLASS}\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXE},0"
+    WriteRegStr HKCR "${VX2_CLASS}\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXE}" "%1"'
+
+    ; Notify shell of association change
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
+SectionEnd
+=======
+    ; Register .vx2 extension
+    WriteRegStr HKCR ".vx2" "" "${VX2_CLASS}"
+
+    ; Register file type
+    WriteRegStr HKCR "${VX2_CLASS}" "" "Neuron Encrypt Encrypted File"
+    WriteRegStr HKCR "${VX2_CLASS}\DefaultIcon" "" "$INSTDIR\${PRODUCT_EXE},0"
+    WriteRegStr HKCR "${VX2_CLASS}\shell\open\command" "" '"$INSTDIR\${PRODUCT_EXE}" "%1"'
+
+    ; Record that we own the association
+    WriteRegDWORD HKLM "Software\NeuronEncrypt" "FileAssocInstalled" 1
+
+    ; Notify shell of association change
+    System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
+SectionEnd
+>>>>>>> REPLACE
