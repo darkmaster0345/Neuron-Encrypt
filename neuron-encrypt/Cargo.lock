@@ -2256,6 +2256,7 @@ dependencies = [
  "eframe",
  "egui",
  "hkdf",
+ "rand",
  "rand_core",
  "rfd",
  "sha2",
