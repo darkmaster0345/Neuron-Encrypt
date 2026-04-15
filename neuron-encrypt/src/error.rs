@@ -37,6 +37,9 @@ pub enum CryptoError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Secure wipe failed for {0}: {1}")]
+    SecureWipeFailed(std::path::PathBuf, String),
 }
 
 /// Result type alias for crypto operations.

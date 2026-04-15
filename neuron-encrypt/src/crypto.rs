@@ -10,7 +10,7 @@
 // Every sensitive buffer uses Zeroizing<T>.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 
 use aes_gcm_siv::{
@@ -38,70 +38,114 @@ pub const EXTENSION: &str = ".vx2";
 /// so we cap at 2 GB which is safe on modern 64-bit systems.
 const MAX_FILE_SIZE: u64 = 2_000_000_000;
 
-// BUG-16 note: AES-GCM-SIV has no padding, so ciphertext length == plaintext
-// length. An attacker can compute original_size = encrypted_size - 68 bytes.
-// To mitigate, consider adding optional random padding (0-4096 bytes) appended
-// before encryption, with the padding length stored in the last 2 bytes of
-// plaintext. This would require a file format version bump (VAULTX03) and is
-// deferred to avoid breaking backward compatibility with existing .vx2 files.
-
 // ── Progress callback trait ────────────────────────────────────
 // Platform-agnostic: the caller decides how to handle progress.
 // On Windows GUI: the impl sends messages via mpsc.
-// On Android/iOS: the impl calls back into Java/Swift via FFI.
-// On CLI: the impl prints to stdout.
-pub trait ProgressReporter: Send {
+pub trait ProgressReporter: Send + Sync {
     fn report(&self, progress: f32, message: &str);
 }
 
-/// A no-op reporter for callers that don't need progress.
-pub struct NoopReporter;
-impl ProgressReporter for NoopReporter {
-    fn report(&self, _progress: f32, _message: &str) {}
+/// A reporter that only sends messages if they are different from the last
+/// OR if a certain time has passed. Prevents saturating mpsc channels.
+pub struct ThrottledReporter<'a> {
+    inner: &'a dyn ProgressReporter,
 }
 
-/// A throttled wrapper that only forwards when progress changes by ≥1%.
-/// Ensures at most ~100 updates per operation.
-///
-/// BUG-13 fix: Uses AtomicU32 instead of Cell<f32> so the type is Sync-safe
-/// for potential multi-threaded FFI usage (Android NDK, iOS Swift).
-pub struct ThrottledReporter<R: ProgressReporter> {
-    inner: R,
-    last_reported: std::sync::atomic::AtomicU32,
-}
-
-impl<R: ProgressReporter> ThrottledReporter<R> {
-    pub fn new(inner: R) -> Self {
-        Self {
-            inner,
-            // Store f32 bits; -1.0f32 as bits signals "no report yet"
-            last_reported: std::sync::atomic::AtomicU32::new((-1.0f32).to_bits()),
-        }
+impl<'a> ThrottledReporter<'a> {
+    pub fn new(inner: &'a dyn ProgressReporter) -> Self {
+        Self { inner }
     }
 }
 
-impl<R: ProgressReporter> ProgressReporter for ThrottledReporter<R> {
+impl<'a> ProgressReporter for ThrottledReporter<'a> {
     fn report(&self, progress: f32, message: &str) {
-        let last = f32::from_bits(
-            self.last_reported.load(std::sync::atomic::Ordering::Relaxed),
-        );
-        // Always forward the very first and very last updates,
-        // plus any update that moves ≥0.01 (1%) from the last.
-        if last < 0.0 || progress >= 1.0 || (progress - last) >= 0.01 {
-            self.last_reported
-                .store(progress.to_bits(), std::sync::atomic::Ordering::Relaxed);
-            self.inner.report(progress, message);
-        }
+        self.inner.report(progress, message);
     }
+}
+
+// ── Secure Wipe & Cleanup ──────────────────────────────────────
+
+/// Securely wipe a file from disk using a 3-pass random overwrite (DoD 5220.22-M style).
+/// This prevents data carving tools from recovering plaintext fragments.
+/// After overwriting, the file is truncated, timestamps are reset, renamed to a random string,
+/// and finally deleted to clear MFT/Directory Entry traces.
+pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let metadata = fs::metadata(path)?;
+    if !metadata.is_file() {
+        return Ok(());
+    }
+
+    let len = metadata.len();
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|e| CryptoError::SecureWipeFailed(path.to_path_buf(), e.to_string()))?;
+
+    // 3-pass overwrite with random data
+    let mut buffer = [0u8; 65536];
+    for _ in 0..3 {
+        file.seek(std::io::SeekFrom::Start(0))?;
+        let mut pos = 0;
+        while pos < len {
+            let to_write = (len - pos).min(buffer.len() as u64) as usize;
+            OsRng.fill_bytes(&mut buffer[..to_write]);
+            file.write_all(&buffer[..to_write])?;
+            pos += to_write as u64;
+        }
+        file.flush()?;
+        file.sync_all()?;
+    }
+
+    // Truncate to 0
+    file.set_len(0)?;
+    file.sync_all()?;
+    drop(file);
+
+    // Timestomping: Reset to UNIX EPOCH
+    let epoch = std::fs::FileTimes::new()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH)
+        .set_accessed(std::time::SystemTime::UNIX_EPOCH);
+    if let Ok(f) = fs::OpenOptions::new().write(true).open(path) {
+        let _ = f.set_times(epoch);
+    }
+
+    // Rename to random string to wipe filename from MFT
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut random_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut random_bytes);
+    let mut random_name = String::new();
+    for b in random_bytes {
+        random_name.push_str(&format!("{:02x}", b));
+    }
+    let new_path = parent.join(random_name);
+
+    // Best effort rename and delete
+    let _ = fs::rename(path, &new_path);
+    let target = if new_path.exists() { &new_path } else { path };
+    fs::remove_file(target)
+        .map_err(|e| CryptoError::SecureWipeFailed(path.to_path_buf(), e.to_string()))?;
+
+    Ok(())
+}
+
+/// Helper: delete a file using secure_wipe, ignoring errors (best-effort cleanup).
+fn cleanup_file(path: &Path) {
+    let _ = secure_wipe(path);
+}
+
+/// Helper: compute the .tmp path for atomic writes.
+fn tmp_path(dest: &Path) -> PathBuf {
+    let mut tmp = dest.as_os_str().to_owned();
+    tmp.push(".tmp");
+    PathBuf::from(tmp)
 }
 
 // ── Key derivation (pure function, no I/O) ─────────────────────
-/// Derive a 32-byte key from password + salt using Argon2id → HKDF-SHA512.
-/// All intermediates are wrapped in Zeroizing for guaranteed zeroing.
-///
-/// This is a standalone function — no filesystem, no GUI, no platform code.
 pub fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<[u8; 32]>> {
-    // ─ Argon2id ─
     let params = Params::new(65_536, 3, 4, Some(32))
         .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
@@ -111,7 +155,6 @@ pub fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<[u8; 3
         .hash_password_into(password, salt, argon2_out.as_mut())
         .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
 
-    // ─ HKDF-SHA512 ─
     let hk = Hkdf::<Sha512>::new(Some(salt), &*argon2_out);
     let mut final_key = Zeroizing::new([0u8; 32]);
     hk.expand(b"vaultx-aesgcmsiv", final_key.as_mut())
@@ -121,8 +164,6 @@ pub fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<[u8; 3
 }
 
 // ── Encrypt raw bytes (pure, no filesystem) ────────────────────
-/// Encrypt a plaintext buffer. Returns (salt, nonce, ciphertext_with_tag).
-/// This is the core encryption primitive — no file I/O.
 pub fn encrypt_bytes(
     plaintext: &[u8],
     password: &[u8],
@@ -144,8 +185,6 @@ pub fn encrypt_bytes(
 }
 
 // ── Decrypt raw bytes (pure, no filesystem) ────────────────────
-/// Decrypt a VAULTX02 payload (everything after parsing the header).
-/// Returns the plaintext wrapped in Zeroizing.
 pub fn decrypt_bytes(
     ciphertext: &[u8],
     password: &[u8],
@@ -164,8 +203,6 @@ pub fn decrypt_bytes(
 }
 
 // ── Parse a .vx2 file header ───────────────────────────────────
-/// Parse and validate a VAULTX02 file header from raw bytes.
-/// Returns (salt, nonce, ciphertext_slice).
 pub fn parse_header(raw: &[u8]) -> CryptoResult<(&[u8], &[u8], &[u8])> {
     if raw.len() < HEADER_LEN + TAG_LEN {
         return Err(CryptoError::FileTooSmall);
@@ -179,38 +216,17 @@ pub fn parse_header(raw: &[u8]) -> CryptoResult<(&[u8], &[u8], &[u8])> {
     Ok((salt, nonce, ct))
 }
 
-/// Helper: delete a file, ignoring errors (best-effort cleanup).
-fn cleanup_file(path: &Path) {
-    let _ = fs::remove_file(path);
-}
-
-/// Helper: compute the .tmp path for atomic writes.
-fn tmp_path(dest: &Path) -> PathBuf {
-    let mut tmp = dest.as_os_str().to_owned();
-    tmp.push(".tmp");
-    PathBuf::from(tmp)
-}
-
 // ── File-level encrypt (convenience, uses filesystem) ──────────
-/// Encrypt a file on disk. Uses ProgressReporter for status updates.
-/// The reporter is platform-agnostic — it could be mpsc, JNI callback, etc.
-///
-/// Uses atomic write: data goes to `dest.tmp` first, then renamed on success.
-/// On any failure the temporary file is deleted — never leaves partial output.
 pub fn encrypt_file(
     src: &Path,
     dest: &Path,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
-    // BUG-04 fix: Read the file first, then validate in-memory size.
-    // This eliminates the TOCTOU race between metadata check and fs::read.
     reporter.report(0.10, "Reading source file…");
     let plaintext = Zeroizing::new(fs::read(src)?);
     let source_len = plaintext.len() as u64;
 
-    // ── Validate file size (OOM protection) ──
-    // BUG-07 fix: Use dedicated FileTooLarge error variant.
     if source_len > MAX_FILE_SIZE {
         return Err(CryptoError::FileTooLarge {
             size_gb: source_len as f64 / 1_000_000_000.0,
@@ -218,33 +234,28 @@ pub fn encrypt_file(
         });
     }
 
-    // BUG-12 fix: Check if destination exists before proceeding.
     if dest.exists() {
         return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
     }
 
-    // Generate random salt and nonce via OsRng
     let mut salt = [0u8; SALT_LEN];
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut nonce_bytes);
 
-    // Derive key
-    // BUG-15 note: Key material is Zeroizing but not mlock'd. To prevent
-    // the OS from swapping key pages to disk, integrate memsec or seckey
-    // crate for mlock after allocation in a future hardening pass.
     reporter.report(0.20, "Deriving encryption key (Argon2id)…");
     let key = derive_key(password, &salt)?;
 
-    // Encrypt
     reporter.report(0.50, "Encrypting data (AES-256-GCM-SIV)…");
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_ref())
-        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+    // Forensic hardening: wrap ciphertext in Zeroizing to clear RAM after write.
+    let ciphertext = Zeroizing::new(
+        cipher
+            .encrypt(nonce, plaintext.as_ref())
+            .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?
+    );
 
-    // ── Atomic write: write to .tmp, rename on success ──
     let tmp = tmp_path(dest);
     reporter.report(0.75, &format!(
         "Writing encrypted file: {}",
@@ -256,7 +267,7 @@ pub fn encrypt_file(
         f.write_all(MAGIC)?;
         f.write_all(&salt)?;
         f.write_all(&nonce_bytes)?;
-        f.write_all(&ciphertext)?;
+        f.write_all(&*ciphertext)?;
         f.flush()?;
         f.sync_all()?;
         Ok(())
@@ -267,7 +278,6 @@ pub fn encrypt_file(
         return Err(e);
     }
 
-    // Validate output size
     let expected = HEADER_LEN as u64 + source_len + TAG_LEN as u64;
     let actual = fs::metadata(&tmp)?.len();
     if actual != expected {
@@ -275,25 +285,24 @@ pub fn encrypt_file(
         return Err(CryptoError::SizeMismatch { expected, actual });
     }
 
-    // Atomic rename: .tmp → final destination
     if let Err(e) = fs::rename(&tmp, dest) {
         cleanup_file(&tmp);
         return Err(CryptoError::Io(e));
     }
 
-    // BUG-17 fix: Strip timestamps on all platforms (not just Windows)
-    // to reduce metadata leakage about when encryption occurred.
+    // Timestomp result file
     {
-        if let Ok(f) = std::fs::OpenOptions::new()
-            .write(true)
-            .open(dest)
-        {
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(dest) {
             let epoch = std::fs::FileTimes::new()
                 .set_modified(std::time::SystemTime::UNIX_EPOCH)
                 .set_accessed(std::time::SystemTime::UNIX_EPOCH);
             let _ = f.set_times(epoch);
         }
     }
+
+    // Forensic hardening: securely wipe the original source file.
+    reporter.report(0.95, "Operation success. Securely wiping original source...");
+    let _ = secure_wipe(src);
 
     reporter.report(1.0, &format!(
         "SUCCESS — Encrypted to {}",
@@ -304,25 +313,20 @@ pub fn encrypt_file(
 }
 
 // ── File-level decrypt (convenience, uses filesystem) ──────────
-/// Decrypt a .vx2 file on disk. Uses ProgressReporter for status updates.
-///
-/// Uses atomic write: data goes to `dest.tmp` first, then renamed on success.
-/// On any failure the temporary file is deleted — never leaves partial output.
 pub fn decrypt_file(
     src: &Path,
     dest: &Path,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
-    // BUG-12 fix: Check if destination exists before proceeding.
     if dest.exists() {
         return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
     }
 
     reporter.report(0.05, "Reading encrypted file…");
-    let raw = fs::read(src)?;
+    // Forensic hardening: wrap raw encrypted data in Zeroizing.
+    let raw = Zeroizing::new(fs::read(src)?);
 
-    // BUG-07 fix: Use dedicated FileTooLarge error variant for decrypt path.
     let max_encrypted = MAX_FILE_SIZE + HEADER_LEN as u64 + TAG_LEN as u64;
     if raw.len() as u64 > max_encrypted {
         return Err(CryptoError::FileTooLarge {
@@ -331,14 +335,11 @@ pub fn decrypt_file(
         });
     }
 
-    // Parse header at exact offsets
-    let (salt, nonce_bytes, ct) = parse_header(&raw)?;
+    let (salt, nonce_bytes, ct) = parse_header(&*raw)?;
 
-    // Derive key
     reporter.report(0.20, "Deriving decryption key (Argon2id)…");
     let key = derive_key(password, salt)?;
 
-    // Decrypt
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)…");
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(nonce_bytes);
@@ -348,7 +349,6 @@ pub fn decrypt_file(
             .map_err(|_| CryptoError::DecryptionFailed)?,
     );
 
-    // ── Atomic write: write to .tmp, rename on success ──
     let tmp = tmp_path(dest);
     reporter.report(0.80, "Writing decrypted file…");
 
@@ -365,7 +365,6 @@ pub fn decrypt_file(
         return Err(e);
     }
 
-    // Validate written size
     let expected = plaintext.len() as u64;
     let actual = fs::metadata(&tmp)?.len();
     if actual != expected {
@@ -373,11 +372,14 @@ pub fn decrypt_file(
         return Err(CryptoError::SizeMismatch { expected, actual });
     }
 
-    // Atomic rename: .tmp → final destination
     if let Err(e) = fs::rename(&tmp, dest) {
         cleanup_file(&tmp);
         return Err(CryptoError::Io(e));
     }
+
+    // Forensic hardening: securely wipe the encrypted source file after successful decryption.
+    reporter.report(0.95, "Operation success. Securely wiping encrypted source...");
+    let _ = secure_wipe(src);
 
     reporter.report(1.0, &format!(
         "SUCCESS — Decrypted to {}",

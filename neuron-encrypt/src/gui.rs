@@ -280,7 +280,8 @@ impl NeuronEncryptApp {
         self.is_processing = true;
         self.progress = 0.0;
 
-        let pw_bytes = Zeroizing::new(self.password.as_bytes().to_vec());
+        let mut pw_bytes = Zeroizing::new(vec![0u8; self.password.len()]);
+        pw_bytes.copy_from_slice(self.password.as_bytes());
         let mode = self.mode;
         let ctx_clone = ctx.clone();
 
@@ -295,7 +296,8 @@ impl NeuronEncryptApp {
         let tx_done = tx.clone();
 
         std::thread::spawn(move || {
-            let reporter = ThrottledReporter::new(MpscReporter { tx });
+            let mpsc_reporter = MpscReporter { tx };
+            let reporter = ThrottledReporter::new(&mpsc_reporter);
             let result = match mode {
                 Mode::Encrypt => crypto::encrypt_file(&path, &dest_path, &pw_bytes, &reporter),
                 Mode::Decrypt => crypto::decrypt_file(&path, &dest_path, &pw_bytes, &reporter),
