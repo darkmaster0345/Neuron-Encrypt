@@ -1,11 +1,11 @@
 @echo off
 echo ================================================================
 echo   NEURON ENCRYPT — Release Build
-echo   Target: x86_64-pc-windows-msvc
+echo   Target: Host
 echo ================================================================
 echo.
 
-cargo build --release --target x86_64-pc-windows-msvc
+cargo build --release
 
 if %ERRORLEVEL% NEQ 0 (
     echo.
@@ -17,6 +17,6 @@ if %ERRORLEVEL% NEQ 0 (
 echo.
 echo ================================================================
 echo   BUILD SUCCESSFUL
-echo   EXE: target\x86_64-pc-windows-msvc\release\neuron-encrypt.exe
+echo   EXE: target\release\neuron-encrypt.exe
 echo ================================================================
 pause

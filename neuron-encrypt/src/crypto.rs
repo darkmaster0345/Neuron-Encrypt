@@ -12,9 +12,12 @@
 use std::fs;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aes_gcm_siv::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     Aes256GcmSiv, Nonce,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -45,30 +48,59 @@ pub trait ProgressReporter: Send + Sync {
     fn report(&self, progress: f32, message: &str);
 }
 
+/// Helper: current time in milliseconds since Unix Epoch.
+fn current_time_ms() -> u32 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u32
+}
+
 /// A reporter that only sends messages if they are different from the last
 /// OR if a certain time has passed. Prevents saturating mpsc channels.
+/// FIX BUG-001: Redesigned to be Sync using atomics and Mutex.
 pub struct ThrottledReporter<'a> {
     inner: &'a dyn ProgressReporter,
+    last_progress: AtomicU32,
+    last_time_ms: AtomicU32,
+    last_message: Mutex<String>,
 }
 
 impl<'a> ThrottledReporter<'a> {
     pub fn new(inner: &'a dyn ProgressReporter) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            last_progress: AtomicU32::new(f32::to_bits(-1.0)),
+            last_time_ms: AtomicU32::new(0),
+            last_message: Mutex::new(String::new()),
+        }
     }
 }
 
 impl<'a> ProgressReporter for ThrottledReporter<'a> {
     fn report(&self, progress: f32, message: &str) {
-        self.inner.report(progress, message);
+        let now = current_time_ms();
+        let last_time = self.last_time_ms.load(Ordering::Relaxed);
+        let last_prog_bits = self.last_progress.load(Ordering::Relaxed);
+        let last_prog = f32::from_bits(last_prog_bits);
+
+        let mut last_msg = self.last_message.lock().unwrap();
+
+        let time_delta = now.wrapping_sub(last_time);
+        if (progress - last_prog).abs() > 0.01 || time_delta > 100 || *last_msg != message {
+            self.inner.report(progress, message);
+            self.last_progress.store(progress.to_bits(), Ordering::Relaxed);
+            self.last_time_ms.store(now, Ordering::Relaxed);
+            *last_msg = message.to_string();
+        }
     }
 }
 
 // ── Secure Wipe & Cleanup ──────────────────────────────────────
 
+/// BUG-042: Secure wipe is ineffective on SSDs/COW filesystems due to wear-leveling
+/// and Copy-on-Write semantics (ZFS, Btrfs, APFS). Full-disk encryption is recommended.
 /// Securely wipe a file from disk using a 3-pass random overwrite (DoD 5220.22-M style).
-/// This prevents data carving tools from recovering plaintext fragments.
-/// After overwriting, the file is truncated, timestamps are reset, renamed to a random string,
-/// and finally deleted to clear MFT/Directory Entry traces.
 pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
     if !path.exists() {
         return Ok(());
@@ -106,9 +138,17 @@ pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
     drop(file);
 
     // Timestomping: Reset to UNIX EPOCH
-    let epoch = std::fs::FileTimes::new()
-        .set_modified(std::time::SystemTime::UNIX_EPOCH)
-        .set_accessed(std::time::SystemTime::UNIX_EPOCH);
+    #[allow(unused_mut)]
+    let mut epoch = std::fs::FileTimes::new()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .set_accessed(SystemTime::UNIX_EPOCH);
+
+    // FIX BUG-024: Reset creation time on Windows
+    #[cfg(target_os = "windows")]
+    {
+        epoch = epoch.set_created(SystemTime::UNIX_EPOCH);
+    }
+
     if let Ok(f) = fs::OpenOptions::new().write(true).open(path) {
         let _ = f.set_times(epoch);
     }
@@ -138,10 +178,22 @@ fn cleanup_file(path: &Path) {
 }
 
 /// Helper: compute the .tmp path for atomic writes.
+/// FIX BUG-010: Use random suffix to prevent predictable temp paths.
 fn tmp_path(dest: &Path) -> PathBuf {
-    let mut tmp = dest.as_os_str().to_owned();
-    tmp.push(".tmp");
-    PathBuf::from(tmp)
+    let mut suffix = [0u8; 8];
+    OsRng.fill_bytes(&mut suffix);
+    let mut name = dest.as_os_str().to_owned();
+    name.push(format!(".neuron-tmp-{:x}", u64::from_be_bytes(suffix)));
+    PathBuf::from(name)
+}
+
+/// FIX BUG-003: Bind header to ciphertext using AAD.
+fn build_aad(salt: &[u8], nonce: &[u8]) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(MAGIC.len() + salt.len() + nonce.len());
+    aad.extend_from_slice(MAGIC);
+    aad.extend_from_slice(salt);
+    aad.extend_from_slice(nonce);
+    aad
 }
 
 // ── Key derivation (pure function, no I/O) ─────────────────────
@@ -164,10 +216,12 @@ pub fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<[u8; 3
 }
 
 // ── Encrypt raw bytes (pure, no filesystem) ────────────────────
+/// FIX BUG-019: Return Zeroizing<Vec<u8>> for ciphertext.
+#[allow(clippy::type_complexity)]
 pub fn encrypt_bytes(
     plaintext: &[u8],
     password: &[u8],
-) -> CryptoResult<(Vec<u8>, [u8; SALT_LEN], [u8; NONCE_LEN])> {
+) -> CryptoResult<(Zeroizing<Vec<u8>>, [u8; SALT_LEN], [u8; NONCE_LEN])> {
     let mut salt = [0u8; SALT_LEN];
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
@@ -177,11 +231,12 @@ pub fn encrypt_bytes(
 
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(&nonce_bytes);
+    let aad = build_aad(&salt, &nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, plaintext)
+        .encrypt(nonce, Payload { msg: plaintext, aad: &aad })
         .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
 
-    Ok((ciphertext, salt, nonce_bytes))
+    Ok((Zeroizing::new(ciphertext), salt, nonce_bytes))
 }
 
 // ── Decrypt raw bytes (pure, no filesystem) ────────────────────
@@ -195,8 +250,9 @@ pub fn decrypt_bytes(
 
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(nonce_bytes);
+    let aad = build_aad(salt, nonce_bytes);
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(nonce, Payload { msg: ciphertext, aad: &aad })
         .map_err(|_| CryptoError::DecryptionFailed)?;
 
     Ok(Zeroizing::new(plaintext))
@@ -223,6 +279,12 @@ pub fn encrypt_file(
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
+    // FIX BUG-040: Validate source is a file.
+    let source_metadata = fs::metadata(src)?;
+    if !source_metadata.is_file() {
+        return Err(CryptoError::NotAFile(src.to_path_buf()));
+    }
+
     reporter.report(0.10, "Reading source file…");
     let plaintext = Zeroizing::new(fs::read(src)?);
     let source_len = plaintext.len() as u64;
@@ -232,10 +294,6 @@ pub fn encrypt_file(
             size_gb: source_len as f64 / 1_000_000_000.0,
             max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
         });
-    }
-
-    if dest.exists() {
-        return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
     }
 
     let mut salt = [0u8; SALT_LEN];
@@ -249,10 +307,10 @@ pub fn encrypt_file(
     reporter.report(0.50, "Encrypting data (AES-256-GCM-SIV)…");
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(&nonce_bytes);
-    // Forensic hardening: wrap ciphertext in Zeroizing to clear RAM after write.
+    let aad = build_aad(&salt, &nonce_bytes);
     let ciphertext = Zeroizing::new(
         cipher
-            .encrypt(nonce, plaintext.as_ref())
+            .encrypt(nonce, Payload { msg: plaintext.as_ref(), aad: &aad })
             .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?
     );
 
@@ -263,7 +321,11 @@ pub fn encrypt_file(
     ));
 
     let write_result = (|| -> CryptoResult<()> {
-        let mut f = fs::File::create(&tmp)?;
+        // FIX BUG-004: O_EXCL to prevent truncation and race.
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         f.write_all(MAGIC)?;
         f.write_all(&salt)?;
         f.write_all(&nonce_bytes)?;
@@ -285,17 +347,38 @@ pub fn encrypt_file(
         return Err(CryptoError::SizeMismatch { expected, actual });
     }
 
-    if let Err(e) = fs::rename(&tmp, dest) {
-        cleanup_file(&tmp);
-        return Err(CryptoError::Io(e));
+    // FIX BUG-036: Platform-specific rename to avoid overwriting.
+    #[cfg(target_os = "windows")]
+    {
+        if dest.exists() {
+            cleanup_file(&tmp);
+            return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
+        }
+        fs::rename(&tmp, dest)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(e) = fs::hard_link(&tmp, dest) {
+            cleanup_file(&tmp);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
+            }
+            return Err(CryptoError::Io(e));
+        }
+        let _ = fs::remove_file(&tmp);
     }
 
     // Timestomp result file
     {
         if let Ok(f) = std::fs::OpenOptions::new().write(true).open(dest) {
-            let epoch = std::fs::FileTimes::new()
-                .set_modified(std::time::SystemTime::UNIX_EPOCH)
-                .set_accessed(std::time::SystemTime::UNIX_EPOCH);
+            #[allow(unused_mut)]
+            let mut epoch = std::fs::FileTimes::new()
+                .set_modified(SystemTime::UNIX_EPOCH)
+                .set_accessed(SystemTime::UNIX_EPOCH);
+            #[cfg(target_os = "windows")]
+            {
+                epoch = epoch.set_created(SystemTime::UNIX_EPOCH);
+            }
             let _ = f.set_times(epoch);
         }
     }
@@ -319,21 +402,24 @@ pub fn decrypt_file(
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
-    if dest.exists() {
-        return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
+    // FIX BUG-040: Validate source is a file.
+    let source_metadata = fs::metadata(src)?;
+    if !source_metadata.is_file() {
+        return Err(CryptoError::NotAFile(src.to_path_buf()));
     }
 
-    reporter.report(0.05, "Reading encrypted file…");
-    // Forensic hardening: wrap raw encrypted data in Zeroizing.
-    let raw = Zeroizing::new(fs::read(src)?);
-
+    // FIX BUG-002: Check file size before reading.
+    let src_len = source_metadata.len();
     let max_encrypted = MAX_FILE_SIZE + HEADER_LEN as u64 + TAG_LEN as u64;
-    if raw.len() as u64 > max_encrypted {
+    if src_len > max_encrypted {
         return Err(CryptoError::FileTooLarge {
-            size_gb: raw.len() as f64 / 1_000_000_000.0,
+            size_gb: src_len as f64 / 1_000_000_000.0,
             max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
         });
     }
+
+    reporter.report(0.05, "Reading encrypted file…");
+    let raw = Zeroizing::new(fs::read(src)?);
 
     let (salt, nonce_bytes, ct) = parse_header(&*raw)?;
 
@@ -343,9 +429,10 @@ pub fn decrypt_file(
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)…");
     let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(nonce_bytes);
+    let aad = build_aad(salt, nonce_bytes);
     let plaintext = Zeroizing::new(
         cipher
-            .decrypt(nonce, ct)
+            .decrypt(nonce, Payload { msg: ct, aad: &aad })
             .map_err(|_| CryptoError::DecryptionFailed)?,
     );
 
@@ -353,7 +440,11 @@ pub fn decrypt_file(
     reporter.report(0.80, "Writing decrypted file…");
 
     let write_result = (|| -> CryptoResult<()> {
-        let mut f = fs::File::create(&tmp)?;
+        // FIX BUG-004: O_EXCL to prevent truncation and race.
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
         f.write_all(&*plaintext)?;
         f.flush()?;
         f.sync_all()?;
@@ -372,9 +463,25 @@ pub fn decrypt_file(
         return Err(CryptoError::SizeMismatch { expected, actual });
     }
 
-    if let Err(e) = fs::rename(&tmp, dest) {
-        cleanup_file(&tmp);
-        return Err(CryptoError::Io(e));
+    // FIX BUG-036: Platform-specific rename strategy.
+    #[cfg(target_os = "windows")]
+    {
+        if dest.exists() {
+            cleanup_file(&tmp);
+            return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
+        }
+        fs::rename(&tmp, dest)?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Err(e) = fs::hard_link(&tmp, dest) {
+            cleanup_file(&tmp);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                return Err(CryptoError::FileAlreadyExists(dest.to_path_buf()));
+            }
+            return Err(CryptoError::Io(e));
+        }
+        let _ = fs::remove_file(&tmp);
     }
 
     // Forensic hardening: securely wipe the encrypted source file after successful decryption.
