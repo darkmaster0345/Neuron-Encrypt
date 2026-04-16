@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::os::windows::fs::FileTimesExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant};
+use std::time::{Instant, SystemTime};
 
 use aes_gcm_siv::{
     aead::{Aead, KeyInit, Payload},
@@ -81,24 +81,21 @@ impl<'a> ProgressReporter for ThrottledReporter<'a> {
         let last_prog_bits = self.last_progress.load(Ordering::Relaxed);
         let last_prog = f32::from_bits(last_prog_bits);
 
-        let (last_msg, last_time_opt) = {
-            let msg_guard = self.last_message.lock().unwrap();
-            let time_guard = self.last_time.lock().unwrap();
-            (msg_guard.clone(), *time_guard)
-        };
+        let mut last_msg = self.last_message.lock().unwrap();
+        let mut last_time_opt = self.last_time.lock().unwrap();
 
-        let should_report = match last_time_opt {
+        let should_report = match *last_time_opt {
             Some(t) => {
                 let time_delta = now.duration_since(t).as_millis();
-                (progress - last_prog).abs() > 0.01 || time_delta > 100 || last_msg != message
+                (progress - last_prog).abs() > 0.01 || time_delta > 100 || *last_msg != message
             }
             None => true,
         };
 
         if should_report {
             self.inner.report(progress, message);
-            *self.last_message.lock().unwrap() = message.to_owned();
-            *self.last_time.lock().unwrap() = Some(now);
+            *last_msg = message.to_owned();
+            *last_time_opt = Some(now);
             self.last_progress.store(progress.to_bits(), Ordering::Relaxed);
         }
     }
@@ -156,7 +153,7 @@ pub fn encrypt_bytes(
 
     let key = derive_key(password, &salt)?;
 
-    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(&nonce_bytes);
     let aad = build_aad(&salt, &nonce_bytes);
     let ciphertext = cipher
@@ -175,7 +172,7 @@ pub fn decrypt_bytes(
 ) -> CryptoResult<Zeroizing<Vec<u8>>> {
     let key = derive_key(password, salt)?;
 
-    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(nonce_bytes);
     let aad = build_aad(salt, nonce_bytes);
     let plaintext = cipher
@@ -211,7 +208,7 @@ pub fn encrypt_file(
     }
 
     // FIX BUG-040: Validate source is a file.
-    let file = fs::File::open(src)?;
+    let mut file = fs::File::open(src)?;
     let source_metadata = file.metadata()?;
     if !source_metadata.is_file() {
         return Err(CryptoError::NotAFile(src.to_path_buf()));
@@ -244,7 +241,7 @@ pub fn encrypt_file(
     let key = derive_key(password, &salt)?;
 
     reporter.report(0.50, "Encrypting data (AES-256-GCM-SIV)…");
-    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let cipher = Aes256GcmSiv::new((&*key).into());
     let nonce = Nonce::from_slice(&nonce_bytes);
     let aad = build_aad(&salt, &nonce_bytes);
     let ciphertext = Zeroizing::new(
@@ -308,7 +305,7 @@ pub fn decrypt_file(
     let key = derive_key(password, salt)?;
 
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)…");
-    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let cipher = Aes256GcmSiv::new((&*key).into());
     let aad = build_aad(salt, nonce);
     let plaintext = Zeroizing::new(
         cipher

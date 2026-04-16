@@ -1,0 +1,15 @@
+<<<<<<< SEARCH
+            // Disable button if validation fails
+            let can_proceed = self.password.len() >= crypto::MIN_PASSWORD_LEN && (self.mode == Mode::Decrypt || *self.password == *self.confirm_password);
+=======
+            // Disable button if validation fails
+            let is_short = self.password.chars().count() < crypto::MIN_PASSWORD_LEN;
+            let password_match = self.mode == Mode::Decrypt || *self.password == *self.confirm_password;
+            let reencrypt_gate = if self.mode == Mode::Encrypt && self.selected_file.as_ref().map(|p| is_vx2_file(p)).unwrap_or(false) {
+                self.reencrypt_confirmed
+            } else {
+                true
+            };
+
+            let can_proceed = !is_short && password_match && reencrypt_gate;
+>>>>>>> REPLACE

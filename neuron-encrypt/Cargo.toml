@@ -26,6 +26,7 @@ rfd         = "0.14"
 thiserror   = "1.0"
 chrono      = "0.4"
 crossbeam-channel = "0.5"
+hex = "0.4.3"
 
 [lints.clippy]
 explicit_auto_deref = "allow"

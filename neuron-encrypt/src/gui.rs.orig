@@ -287,7 +287,7 @@ impl NeuronEncryptApp {
         let Some(ref file_path) = self.selected_file else { return; };
 
         // FIX BUG-037: Enforce minimum password length
-        if self.password.chars().count() < crypto::MIN_PASSWORD_LEN {
+        if self.password.len() < crypto::MIN_PASSWORD_LEN {
             self.status = Some(StatusMessage { text: format!("Passphrase must be at least {} characters.", crypto::MIN_PASSWORD_LEN), color: Palette::ERROR });
             return;
         }
@@ -509,7 +509,7 @@ impl NeuronEncryptApp {
             ui.add(egui::ProgressBar::new(fraction).fill(strength_color(&strength)));
 
             // FIX BUG-037: Enforce min length
-            if !self.password.is_empty() && self.password.chars().count() < crypto::MIN_PASSWORD_LEN {
+            if !self.password.is_empty() && self.password.len() < crypto::MIN_PASSWORD_LEN {
                 ui.label(egui::RichText::new(format!("⚠ Minimum {} characters required", crypto::MIN_PASSWORD_LEN)).color(Palette::WARNING).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
             }
 
@@ -528,15 +528,7 @@ impl NeuronEncryptApp {
             let btn_label = if self.mode == Mode::Encrypt { "PROTECT FILE" } else { "DECRYPT FILE" };
 
             // Disable button if validation fails
-            let is_short = self.password.chars().count() < crypto::MIN_PASSWORD_LEN;
-            let password_match = self.mode == Mode::Decrypt || *self.password == *self.confirm_password;
-            let reencrypt_gate = if self.mode == Mode::Encrypt && self.selected_file.as_ref().map(|p| is_vx2_file(p)).unwrap_or(false) {
-                self.reencrypt_confirmed
-            } else {
-                true
-            };
-
-            let can_proceed = !is_short && password_match && reencrypt_gate;
+            let can_proceed = self.password.len() >= crypto::MIN_PASSWORD_LEN && (self.mode == Mode::Decrypt || *self.password == *self.confirm_password);
 
             if ui.add_enabled(can_proceed, egui::Button::new(egui::RichText::new(btn_label).strong())
                 .fill(Palette::PRIMARY)
