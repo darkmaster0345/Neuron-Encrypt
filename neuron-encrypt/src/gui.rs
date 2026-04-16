@@ -1,15 +1,16 @@
 // gui.rs — Clean Minimal Modern UI
 // ZERO direct crypto calls. Crypto runs via spawned thread + mpsc channel.
 
-use std::path::PathBuf;
-use std::sync::mpsc;
+use std::path::{Path, PathBuf};
+use crossbeam_channel as mpsc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use zeroize::Zeroizing;
-use rand::{Rng, thread_rng};
+use rand_core::{OsRng, RngCore};
 
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
+use neuron_encrypt_core::error::CryptoError;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // COLOR SYSTEM — PREMIUM MINIMAL PALETTE
@@ -48,7 +49,7 @@ enum AppFlow {
 enum GuiMsg {
     Progress(f32, String),
     Done(String),
-    Error(String),
+    Error(CryptoError), // FIX BUG-025: Use CryptoError directly
 }
 
 struct MpscReporter {
@@ -57,7 +58,8 @@ struct MpscReporter {
 
 impl ProgressReporter for MpscReporter {
     fn report(&self, progress: f32, message: &str) {
-        let _ = self.tx.send(GuiMsg::Progress(progress, message.to_string()));
+        // FIX BUG-038: Use try_send for progress updates to avoid blocking
+        let _ = self.tx.try_send(GuiMsg::Progress(progress, message.to_string()));
     }
 }
 
@@ -82,7 +84,8 @@ enum Mode {
 // ═══════════════════════════════════════════════════════════════════════════════
 // PASSWORD STRENGTH
 // ═══════════════════════════════════════════════════════════════════════════════
-#[derive(PartialEq)]
+// FIX BUG-028: Add Clone and Copy derives
+#[derive(PartialEq, Clone, Copy)]
 enum Strength {
     None,
     Weak,
@@ -91,8 +94,21 @@ enum Strength {
     Elite,
 }
 
+fn has_sequential_pattern(pw: &str) -> bool {
+    let chars: Vec<char> = pw.chars().collect();
+    if chars.len() < 4 { return false; }
+    for window in chars.windows(4) {
+        let diffs: Vec<i32> = window.windows(2).map(|w| (w[1] as i32) - (w[0] as i32)).collect();
+        if diffs.iter().all(|&d| d == 1) || diffs.iter().all(|&d| d == -1) {
+            return true;
+        }
+    }
+    false
+}
+
 fn evaluate_strength(pw: &str) -> (Strength, f32) {
     if pw.is_empty() { return (Strength::None, 0.0); }
+
     let variety = [
         pw.chars().any(|c| c.is_ascii_lowercase()),
         pw.chars().any(|c| c.is_ascii_uppercase()),
@@ -100,7 +116,13 @@ fn evaluate_strength(pw: &str) -> (Strength, f32) {
         pw.chars().any(|c| !c.is_alphanumeric()),
     ].iter().filter(|&&b| b).count();
 
-    let score = match (pw.len(), variety) {
+    // FIX BUG-014: Enhanced strength check
+    let unique_chars: std::collections::HashSet<char> = pw.chars().collect();
+    let unique_ratio = unique_chars.len() as f32 / pw.len() as f32;
+    let is_repetitive = unique_ratio < 0.3;
+    let is_sequential = has_sequential_pattern(pw);
+
+    let mut score = match (pw.len(), variety) {
         (0..=3, _) => 1,
         (4..=7, 0..=2) => 3,
         (4..=7, _) => 5,
@@ -108,6 +130,11 @@ fn evaluate_strength(pw: &str) -> (Strength, f32) {
         (8..=11, _) => 8,
         (_, _) => 10,
     };
+
+    // Adjust score for repetitive/sequential patterns
+    if is_repetitive || is_sequential {
+        score = score.min(5);
+    }
 
     match score {
         1..=2 => (Strength::Weak, 0.25),
@@ -134,7 +161,9 @@ pub struct NeuronEncryptApp {
     mode: Mode,
     flow: AppFlow,
     selected_file: Option<PathBuf>,
+    dest_path: Option<PathBuf>, // FIX BUG-008: Store destination path
     password: Zeroizing<String>,
+    confirm_password: Zeroizing<String>, // FIX BUG-005: Password confirmation
     show_password: bool,
     crypto_rx: Option<mpsc::Receiver<GuiMsg>>,
     progress: f32,
@@ -146,33 +175,86 @@ pub struct NeuronEncryptApp {
     scramble_text: String,
 }
 
+/// FIX BUG-007: Case-insensitive VX2 check
+fn is_vx2_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("vx2"))
+        .unwrap_or(false)
+}
+
 impl NeuronEncryptApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
-        let now = Instant::now();
         Self {
             mode: Mode::Encrypt,
             flow: AppFlow::FileDrop,
             selected_file: None,
+            dest_path: None,
             password: Zeroizing::new(String::new()),
+            confirm_password: Zeroizing::new(String::new()),
             show_password: false,
             crypto_rx: None,
             progress: 0.0,
             status: None,
             spinner_index: 0,
-            last_spinner_tick: now,
-            last_clock_update: now,
+            last_spinner_tick: Instant::now(),
+            last_clock_update: Instant::now(),
             current_time: chrono::Local::now().format("%H:%M:%S").to_string(),
-            scramble_text: String::new(),
+            scramble_text: "INITIALIZING...".to_string(),
         }
     }
 
-    fn set_status(&mut self, msg: &str, color: egui::Color32) {
-        self.status = Some(StatusMessage { text: msg.to_string(), color });
+    fn spinner_char(&self) -> char {
+        let chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        chars[self.spinner_index % 10]
     }
 
-    fn spinner_char(&self) -> char {
-        const FRAMES: &[char] = &['\u{280B}', '\u{2819}', '\u{2839}', '\u{2838}', '\u{283C}', '\u{2834}', '\u{2826}', '\u{2827}', '\u{2807}', '\u{280F}'];
-        FRAMES[self.spinner_index % FRAMES.len()]
+    fn poll_crypto(&mut self) {
+        let should_clear = if let Some(ref rx) = self.crypto_rx {
+            let mut last_msg = None;
+            while let Ok(msg) = rx.try_recv() {
+                last_msg = Some(msg);
+                if let Some(GuiMsg::Done(_)) | Some(GuiMsg::Error(_)) = last_msg {
+                    break;
+                }
+            }
+
+            if let Some(msg) = last_msg {
+                match msg {
+                    GuiMsg::Progress(p, text) => {
+                        self.progress = p;
+                        self.status = Some(StatusMessage { text, color: Palette::TEXT_SECONDARY });
+                        false
+                    }
+                    GuiMsg::Done(text) => {
+                        self.flow = AppFlow::Success;
+                        self.status = Some(StatusMessage { text, color: Palette::SUCCESS });
+                        true
+                    }
+                    GuiMsg::Error(err) => {
+                        self.flow = AppFlow::Failure;
+                        // FIX BUG-025: Handle structured errors
+                        let err_text = match err {
+                            CryptoError::DecryptionFailed => "ERROR: Decryption Failed. Wrong password?".to_string(),
+                            CryptoError::InvalidMagic => "ERROR: Invalid File Format.".to_string(),
+                            CryptoError::FileAlreadyExists(p) => format!("ERROR: File Already Exists: {}", p.display()),
+                            CryptoError::NotAFile(_) => "ERROR: Not a regular file.".to_string(),
+                            _ => format!("ERROR: {}", err),
+                        };
+                        self.status = Some(StatusMessage { text: err_text, color: Palette::ERROR });
+                        true
+                    }
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if should_clear {
+            self.crypto_rx = None;
+        }
     }
 
     fn update_clock_and_spinner(&mut self, ctx: &egui::Context) {
@@ -185,12 +267,15 @@ impl NeuronEncryptApp {
             self.last_spinner_tick = now;
             self.spinner_index = (self.spinner_index + 1) % 10;
             if self.flow == AppFlow::Processing {
-                let mut rng = thread_rng();
+                let mut rng = OsRng;
                 let s: String = (0..16).map(|_| {
-                    let v = rng.gen_range(0..16);
+                    let v = rng.next_u32() % 16;
                     std::char::from_digit(v, 16).unwrap()
                 }).collect();
-                self.scramble_text = format!("{}...{}", &s[..6], &s[10..]);
+                // FIX BUG-027: Safe UTF-8 slicing
+                let prefix: String = s.chars().take(6).collect();
+                let suffix: String = s.chars().skip(10).take(6).collect();
+                self.scramble_text = format!("{}...{}", prefix, suffix);
             }
         }
         ctx.request_repaint_after(if self.flow == AppFlow::Processing { Duration::from_millis(16) } else { Duration::from_millis(500) });
@@ -198,79 +283,78 @@ impl NeuronEncryptApp {
 
     fn execute(&mut self, ctx: &egui::Context) {
         let Some(ref file_path) = self.selected_file else { return; };
-        if self.password.is_empty() { return; }
-        let path = file_path.clone();
-        let dest_path = if self.mode == Mode::Encrypt {
-            rfd::FileDialog::new()
-                .set_title("Save Encrypted File")
-                .set_file_name(format!("{}.vx2", path.file_name().unwrap_or_default().to_string_lossy()))
-                .add_filter("VaultX", &["vx2"]).save_file()
+
+        // FIX BUG-037: Enforce minimum password length
+        const MIN_PASSWORD_LEN: usize = 8;
+        if self.password.len() < MIN_PASSWORD_LEN {
+            self.status = Some(StatusMessage { text: format!("Passphrase must be at least {} characters.", MIN_PASSWORD_LEN), color: Palette::ERROR });
+            return;
+        }
+
+        // FIX BUG-005: Validate password match
+        if self.mode == Mode::Encrypt && *self.password != *self.confirm_password {
+            self.status = Some(StatusMessage { text: "Passphrases do not match.".to_string(), color: Palette::ERROR });
+            return;
+        }
+
+        // FIX BUG-041: Double encryption warning
+        if self.mode == Mode::Encrypt && is_vx2_file(file_path) {
+             self.status = Some(StatusMessage { text: "WARNING: You are encrypting an already protected .vx2 file.".to_string(), color: Palette::WARNING });
+        }
+
+        let mode = self.mode;
+        let src = file_path.clone();
+
+        // FIX BUG-031: Fix stripping suffix
+        let default_name = file_path.file_name().unwrap_or_default().to_string_lossy();
+        let dest_name = if mode == Mode::Encrypt {
+            format!("{}{}", default_name, crypto::EXTENSION)
         } else {
-            let default_name = path.to_string_lossy().strip_suffix(".vx2").unwrap_or(&path.to_string_lossy()).to_string();
-            rfd::FileDialog::new()
-                .set_title("Save Decrypted File")
-                .set_file_name(PathBuf::from(default_name).file_name().unwrap_or_default().to_string_lossy().into_owned()).save_file()
+            default_name.strip_suffix(crypto::EXTENSION).unwrap_or(&default_name).to_string()
         };
-        if let Some(dest) = dest_path {
-            let (tx, rx) = mpsc::channel();
-            self.crypto_rx = Some(rx);
-            self.flow = AppFlow::Processing;
-            self.progress = 0.0;
-            let mut pw_bytes = Zeroizing::new(vec![0u8; self.password.len()]);
-            pw_bytes.copy_from_slice(self.password.as_bytes());
-            let mode = self.mode;
-            let ctx_clone = ctx.clone();
-            std::thread::spawn(move || {
-                let mpsc_reporter = MpscReporter { tx: tx.clone() };
-                let reporter = ThrottledReporter::new(&mpsc_reporter);
-                let res = match mode {
-                    Mode::Encrypt => crypto::encrypt_file(&path, &dest, &pw_bytes, &reporter),
-                    Mode::Decrypt => crypto::decrypt_file(&path, &dest, &pw_bytes, &reporter),
-                };
-                match res {
-                    Ok(_) => { let _ = tx.send(GuiMsg::Done("Operation complete".into())); }
-                    Err(e) => { let _ = tx.send(GuiMsg::Error(e.to_string())); }
-                }
-                ctx_clone.request_repaint();
-            });
+
+        let mut dialog = rfd::FileDialog::new()
+            .set_directory(file_path.parent().unwrap_or(Path::new(".")))
+            .set_file_name(&dest_name);
+
+        if mode == Mode::Decrypt {
+             dialog = dialog.add_filter("Decrypted File", &["*"]);
+        } else {
+             dialog = dialog.add_filter("VaultX Container", &["vx2"]);
         }
-    }
 
+        let Some(dest) = dialog.save_file() else { return; };
+        self.dest_path = Some(dest.clone());
 
-    fn poll_crypto(&mut self) {
-        let mut msgs = Vec::new();
-        if let Some(ref rx) = self.crypto_rx {
-            while let Ok(msg) = rx.try_recv() {
-                msgs.push(msg);
+        let password = self.password.clone();
+        let (tx, rx) = mpsc::unbounded();
+        self.crypto_rx = Some(rx);
+        self.flow = AppFlow::Processing;
+        self.progress = 0.0;
+
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let binding = MpscReporter { tx: tx.clone() };
+            let reporter = ThrottledReporter::new(&binding);
+            let result = if mode == Mode::Encrypt {
+                crypto::encrypt_file(&src, &dest, password.as_bytes(), &reporter)
+            } else {
+                crypto::decrypt_file(&src, &dest, password.as_bytes(), &reporter)
+            };
+
+            match result {
+                Ok(_) => { let _ = tx.send(GuiMsg::Done("Operation complete".into())); }
+                Err(e) => { let _ = tx.send(GuiMsg::Error(e)); }
             }
-        }
-
-        for msg in msgs {
-            match msg {
-                GuiMsg::Progress(p, text) => {
-                    self.progress = p;
-                    self.set_status(&text, Palette::PRIMARY);
-                }
-                GuiMsg::Done(text) => {
-                    self.progress = 1.0;
-                    self.set_status(&text, Palette::SUCCESS);
-                    self.flow = AppFlow::Success;
-                    self.crypto_rx = None;
-                }
-                GuiMsg::Error(text) => {
-                    self.progress = 0.0;
-                    self.set_status(&text, Palette::ERROR);
-                    self.flow = AppFlow::Failure;
-                    self.crypto_rx = None;
-                }
-            }
-        }
+            ctx_clone.request_repaint();
+        });
     }
 
     fn secure_wipe_session(&mut self) {
         self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
         self.selected_file = None;
-        self.progress = 0.0;
+        self.dest_path = None;
         self.status = None;
         self.flow = AppFlow::FileDrop;
     }
@@ -279,11 +363,15 @@ impl NeuronEncryptApp {
 impl eframe::App for NeuronEncryptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
-        if !dropped_files.is_empty() && self.flow == AppFlow::FileDrop {
+        // FIX BUG-017 & BUG-043: Handle file drops in multiple flows and multiple files
+        if !dropped_files.is_empty() && (self.flow == AppFlow::FileDrop || self.flow == AppFlow::Configure) {
+            if dropped_files.len() > 1 {
+                self.status = Some(StatusMessage { text: "Only one file can be processed at a time.".to_string(), color: Palette::WARNING });
+            }
             if let Some(path) = dropped_files[0].path.clone() {
                 self.selected_file = Some(path.clone());
                 self.flow = AppFlow::Configure;
-                self.mode = if path.extension().is_some_and(|e| e == "vx2") { Mode::Decrypt } else { Mode::Encrypt };
+                self.mode = if is_vx2_file(&path) { Mode::Decrypt } else { Mode::Encrypt };
             }
         }
         self.poll_crypto();
@@ -343,7 +431,7 @@ impl NeuronEncryptApp {
                    if let Some(path) = rfd::FileDialog::new().pick_file() {
                        self.selected_file = Some(path.clone());
                        self.flow = AppFlow::Configure;
-                       self.mode = if path.extension().is_some_and(|e| e == "vx2") { Mode::Decrypt } else { Mode::Encrypt };
+                       self.mode = if is_vx2_file(&path) { Mode::Decrypt } else { Mode::Encrypt };
                    }
                 }
                 ui.add_space(20.0);
@@ -354,7 +442,12 @@ impl NeuronEncryptApp {
     fn draw_step_configure(&mut self, ui: &mut egui::Ui, _cw: f32, ctx: &egui::Context) {
         egui::Frame::none().fill(Palette::SURFACE).stroke(egui::Stroke::new(1.0, Palette::BORDER)).rounding(16.0).inner_margin(egui::Margin::same(32.0)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.add(egui::Button::new("← BACK").fill(Palette::SECONDARY.gamma_multiply(0.2))).clicked() { self.flow = AppFlow::FileDrop; }
+                // FIX BUG-018: Clear password on BACK
+                if ui.add(egui::Button::new("← BACK").fill(Palette::SECONDARY.gamma_multiply(0.2))).clicked() {
+                    self.password = Zeroizing::new(String::new());
+                    self.confirm_password = Zeroizing::new(String::new());
+                    self.flow = AppFlow::FileDrop;
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.selectable_label(self.mode == Mode::Encrypt, "ENCRYPT").clicked() { self.mode = Mode::Encrypt; }
                     if ui.selectable_label(self.mode == Mode::Decrypt, "DECRYPT").clicked() { self.mode = Mode::Decrypt; }
@@ -362,16 +455,68 @@ impl NeuronEncryptApp {
             });
             ui.add_space(24.0);
             if let Some(path) = &self.selected_file {
-                ui.label(egui::RichText::new(path.file_name().unwrap_or_default().to_string_lossy()).font(egui::FontId::new(18.0, egui::FontFamily::Proportional)).color(Palette::TEXT_PRIMARY).strong());
+                let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+                // FIX BUG-011: Safe UTF-8 truncation
+                let display_name = if file_name.chars().count() > 42 {
+                    let truncated: String = file_name.chars().take(42).collect();
+                    format!("{}...", truncated)
+                } else {
+                    file_name.to_string()
+                };
+                ui.label(egui::RichText::new(display_name).font(egui::FontId::new(18.0, egui::FontFamily::Proportional)).color(Palette::TEXT_PRIMARY).strong());
             }
             ui.add_space(32.0);
             ui.label(egui::RichText::new("SET SECURITY PASSPHRASE").color(Palette::TEXT_SECONDARY).strong());
             ui.add_space(8.0);
-            ui.add(egui::TextEdit::singleline(&mut *self.password).password(!self.show_password).hint_text("Passphrase...").desired_width(f32::INFINITY));
+
+            ui.horizontal(|ui| {
+                ui.add(egui::TextEdit::singleline(&mut *self.password)
+                    .password(!self.show_password)
+                    .hint_text("Passphrase...")
+                    .desired_width(ui.available_width() - 40.0));
+
+                // FIX BUG-006: Password show/hide toggle
+                if ui.selectable_label(self.show_password, if self.show_password { "👁" } else { "🙈" }).clicked() {
+                    self.show_password = !self.show_password;
+                }
+            });
+
+            // FIX BUG-005: Confirm password field
+            if self.mode == Mode::Encrypt {
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("CONFIRM PASSPHRASE").color(Palette::TEXT_SECONDARY).strong());
+                ui.add_space(8.0);
+                ui.add(egui::TextEdit::singleline(&mut *self.confirm_password)
+                    .password(!self.show_password)
+                    .hint_text("Confirm passphrase...")
+                    .desired_width(f32::INFINITY));
+
+                if !self.confirm_password.is_empty() && *self.password != *self.confirm_password {
+                    ui.label(egui::RichText::new("⚠ Passphrases do not match").color(Palette::ERROR).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
+                }
+            }
+
             let (strength, fraction) = evaluate_strength(&self.password);
             ui.add(egui::ProgressBar::new(fraction).fill(strength_color(&strength)));
+
+            // FIX BUG-037: Enforce min length
+            const MIN_PASSWORD_LEN: usize = 8;
+            if !self.password.is_empty() && self.password.len() < MIN_PASSWORD_LEN {
+                ui.label(egui::RichText::new(format!("⚠ Minimum {} characters required", MIN_PASSWORD_LEN)).color(Palette::WARNING).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
+            }
+
             ui.add_space(40.0);
-            if ui.add_sized(egui::vec2(ui.available_width(), 48.0), egui::Button::new("PROTECT FILE").fill(Palette::PRIMARY)).clicked() {
+
+            // FIX BUG-039: Dynamic button label
+            let btn_label = if self.mode == Mode::Encrypt { "PROTECT FILE" } else { "DECRYPT FILE" };
+
+            // Disable button if validation fails
+            let can_proceed = self.password.len() >= MIN_PASSWORD_LEN && (self.mode == Mode::Decrypt || *self.password == *self.confirm_password);
+
+            if ui.add_enabled(can_proceed, egui::Button::new(egui::RichText::new(btn_label).strong())
+                .fill(Palette::PRIMARY)
+                .rounding(12.0)
+                .min_size(egui::vec2(ui.available_width(), 48.0))).clicked() {
                 self.execute(ctx);
             }
         });
@@ -398,18 +543,25 @@ impl NeuronEncryptApp {
                 ui.add_space(20.0);
                 let title = if success { "Operation Successful" } else { "Operation Failed" };
                 ui.label(egui::RichText::new(title).font(egui::FontId::new(24.0, egui::FontFamily::Proportional)).color(if success { Palette::SUCCESS } else { Palette::ERROR }).strong());
-                if !success {
-                    if let Some(ref status) = self.status {
-                        let err_msg = if status.text.contains("Access is denied") { "ERROR: Access Denied. File in use?" } else if status.text.contains("not a VAULTX02") { "ERROR: Invalid File Format." } else { "ERROR: Decryption Failed. Wrong password?" };
-                        ui.label(egui::RichText::new(err_msg).color(Palette::TEXT_SECONDARY));
-                    }
+
+                if let Some(ref status) = self.status {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(&status.text).color(Palette::TEXT_SECONDARY));
                 }
+
                 ui.add_space(24.0);
                 if success {
-                    if let Some(ref path) = self.selected_file {
+                    // FIX BUG-008 & BUG-009: Correct folder opening
+                    if let Some(path) = self.dest_path.as_ref().or(self.selected_file.as_ref()) {
                         if ui.button("OPEN FOLDER").clicked() {
                             if let Some(parent) = path.parent() {
-                                let mut cmd = if cfg!(target_os = "windows") { std::process::Command::new("explorer") } else { std::process::Command::new("xdg-open") };
+                                #[cfg(target_os = "windows")]
+                                let mut cmd = std::process::Command::new("explorer");
+                                #[cfg(target_os = "macos")]
+                                let mut cmd = std::process::Command::new("open");
+                                #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+                                let mut cmd = std::process::Command::new("xdg-open");
+
                                 let _ = cmd.arg(parent).spawn();
                             }
                         }

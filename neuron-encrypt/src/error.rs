@@ -40,6 +40,9 @@ pub enum CryptoError {
 
     #[error("Secure wipe failed for {0}: {1}")]
     SecureWipeFailed(std::path::PathBuf, String),
+    /// BUG-040: Not a regular file.
+    #[error("Not a regular file: {0}")]
+    NotAFile(std::path::PathBuf),
 }
 
 /// Result type alias for crypto operations.

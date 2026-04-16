@@ -72,35 +72,35 @@ fn main() -> eframe::Result<()> {
 fn apply_custom_theme(ctx: &eframe::egui::Context) {
     let mut visuals = eframe::egui::Visuals::dark();
 
-    // Background colors
-    visuals.panel_fill = eframe::egui::Color32::from_rgb(0x0F, 0x0F, 0x0F);
-    visuals.window_fill = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
-    visuals.faint_bg_color = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
-    visuals.extreme_bg_color = eframe::egui::Color32::from_rgb(0x0F, 0x0F, 0x0F);
+    // FIX BUG-015: Align background colors with Palette::BG and SURFACE
+    visuals.panel_fill = eframe::egui::Color32::from_rgb(0x0A, 0x0A, 0x0A);
+    visuals.window_fill = eframe::egui::Color32::from_rgb(0x14, 0x14, 0x14);
+    visuals.faint_bg_color = eframe::egui::Color32::from_rgb(0x14, 0x14, 0x14);
+    visuals.extreme_bg_color = eframe::egui::Color32::from_rgb(0x0A, 0x0A, 0x0A);
 
     // Widget styling
     visuals.widgets.noninteractive.bg_fill =
-        eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+        eframe::egui::Color32::from_rgb(0x14, 0x14, 0x14);
     visuals.widgets.noninteractive.fg_stroke = eframe::egui::Stroke::new(
         1.0,
         eframe::egui::Color32::from_rgb(0xF5, 0xF5, 0xF5),
     );
     visuals.widgets.noninteractive.bg_stroke = eframe::egui::Stroke::new(
         1.0,
-        eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A),
+        eframe::egui::Color32::from_rgb(0x22, 0x22, 0x22),
     );
 
-    visuals.widgets.inactive.bg_fill = eframe::egui::Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    visuals.widgets.inactive.bg_fill = eframe::egui::Color32::from_rgb(0x14, 0x14, 0x14);
     visuals.widgets.inactive.fg_stroke = eframe::egui::Stroke::new(
         1.0,
         eframe::egui::Color32::from_rgb(0xA0, 0xA0, 0xA0),
     );
     visuals.widgets.inactive.bg_stroke = eframe::egui::Stroke::new(
         1.0,
-        eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A),
+        eframe::egui::Color32::from_rgb(0x22, 0x22, 0x22),
     );
 
-    visuals.widgets.hovered.bg_fill = eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
+    visuals.widgets.hovered.bg_fill = eframe::egui::Color32::from_rgb(0x22, 0x22, 0x22);
     visuals.widgets.hovered.fg_stroke = eframe::egui::Stroke::new(
         1.0,
         eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
@@ -110,7 +110,7 @@ fn apply_custom_theme(ctx: &eframe::egui::Context) {
         eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
     );
 
-    visuals.widgets.active.bg_fill = eframe::egui::Color32::from_rgb(0x2A, 0x2A, 0x2A);
+    visuals.widgets.active.bg_fill = eframe::egui::Color32::from_rgb(0x22, 0x22, 0x22);
     visuals.widgets.active.fg_stroke = eframe::egui::Stroke::new(
         1.0,
         eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
@@ -120,8 +120,9 @@ fn apply_custom_theme(ctx: &eframe::egui::Context) {
         eframe::egui::Color32::from_rgb(0x8B, 0x5C, 0xF6),
     );
 
+    // FIX BUG-013: Use unmultiplied alpha
     visuals.selection.bg_fill =
-        eframe::egui::Color32::from_rgba_premultiplied(0x63, 0x66, 0xF1, 40);
+        eframe::egui::Color32::from_rgba_unmultiplied(0x63, 0x66, 0xF1, 40);
     visuals.selection.stroke = eframe::egui::Stroke::new(
         1.0,
         eframe::egui::Color32::from_rgb(0x63, 0x66, 0xF1),
