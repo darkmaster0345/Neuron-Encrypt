@@ -69,7 +69,7 @@ Section "Core Application (required)" SEC_CORE
     SetOutPath "$INSTDIR"
 
     ; Application binary
-    File "..\neuron-encrypt\target\x86_64-pc-windows-gnu\release\neuron-encrypt.exe"
+    File "..\neuron-encrypt\target\x86_64-pc-windows-msvc\release\neuron-encrypt.exe"
 
     ; License
     File /oname=LICENSE.txt "..\LICENSE"

@@ -43,6 +43,9 @@ pub enum CryptoError {
     /// BUG-040: Not a regular file.
     #[error("Not a regular file: {0}")]
     NotAFile(std::path::PathBuf),
+
+    #[error("Passphrase too short (minimum {0} characters required)")]
+    PassphraseTooShort(usize),
 }
 
 /// Result type alias for crypto operations.

@@ -2265,6 +2265,7 @@ dependencies = [
  "crossbeam-channel",
  "eframe",
  "egui",
+ "hex",
  "hkdf",
  "rand_core",
  "rfd",
