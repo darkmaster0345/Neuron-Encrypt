@@ -256,7 +256,7 @@ cargo test --all
 
 ## License
 
-MIT License — Copyright (c) 2024–2026 Ubaid ur Rehman
+GPLV3 License — Copyright (c) 2024–2026 Ubaid ur Rehman
 
 See LICENSE file for full text.
 
@@ -274,4 +274,3 @@ See LICENSE file for full text.
 
 Made with ❤️ and Rust
 
-```
