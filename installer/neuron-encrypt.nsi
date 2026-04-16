@@ -18,7 +18,7 @@
 !define VX2_CLASS "NeuronEncrypt.vx2file"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "${FILEDIR}\NeuronEncrypt-Windows-x64-Setup.exe"
+OutFile "NeuronEncrypt-Windows-x64-Setup.exe"
 InstallDir "$PROGRAMFILES64\NeuronEncrypt"
 InstallDirRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation"
 RequestExecutionLevel admin
@@ -69,7 +69,7 @@ Section "Core Application (required)" SEC_CORE
     SetOutPath "$INSTDIR"
 
     ; Application binary
-    File "..\neuron-encrypt\target\x86_64-pc-windows-msvc\release\neuron-encrypt.exe"
+    File "..\neuron-encrypt\target\x86_64-pc-windows-gnu\release\neuron-encrypt.exe"
 
     ; License
     File /oname=LICENSE.txt "..\LICENSE"

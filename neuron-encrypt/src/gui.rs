@@ -173,6 +173,7 @@ pub struct NeuronEncryptApp {
     last_clock_update: Instant,
     current_time: String,
     scramble_text: String,
+    reencrypt_confirmed: bool,
 }
 
 /// FIX BUG-007: Case-insensitive VX2 check
@@ -201,6 +202,7 @@ impl NeuronEncryptApp {
             last_clock_update: Instant::now(),
             current_time: chrono::Local::now().format("%H:%M:%S").to_string(),
             scramble_text: "INITIALIZING...".to_string(),
+            reencrypt_confirmed: false,
         }
     }
 
@@ -285,9 +287,8 @@ impl NeuronEncryptApp {
         let Some(ref file_path) = self.selected_file else { return; };
 
         // FIX BUG-037: Enforce minimum password length
-        const MIN_PASSWORD_LEN: usize = 8;
-        if self.password.len() < MIN_PASSWORD_LEN {
-            self.status = Some(StatusMessage { text: format!("Passphrase must be at least {} characters.", MIN_PASSWORD_LEN), color: Palette::ERROR });
+        if self.password.len() < crypto::MIN_PASSWORD_LEN {
+            self.status = Some(StatusMessage { text: format!("Passphrase must be at least {} characters.", crypto::MIN_PASSWORD_LEN), color: Palette::ERROR });
             return;
         }
 
@@ -297,20 +298,25 @@ impl NeuronEncryptApp {
             return;
         }
 
-        // FIX BUG-041: Double encryption warning
-        if self.mode == Mode::Encrypt && is_vx2_file(file_path) {
-             self.status = Some(StatusMessage { text: "WARNING: You are encrypting an already protected .vx2 file.".to_string(), color: Palette::WARNING });
+        // FIX BUG-041: Double encryption guardrail
+        if self.mode == Mode::Encrypt && is_vx2_file(file_path) && !self.reencrypt_confirmed {
+             self.status = Some(StatusMessage { text: "Re-encryption not confirmed. Check the confirmation box to proceed.".to_string(), color: Palette::WARNING });
+             return;
         }
 
         let mode = self.mode;
         let src = file_path.clone();
 
-        // FIX BUG-031: Fix stripping suffix
+        // FIX BUG-031: Fix stripping suffix (case-insensitive)
         let default_name = file_path.file_name().unwrap_or_default().to_string_lossy();
         let dest_name = if mode == Mode::Encrypt {
             format!("{}{}", default_name, crypto::EXTENSION)
         } else {
-            default_name.strip_suffix(crypto::EXTENSION).unwrap_or(&default_name).to_string()
+            if default_name.to_lowercase().ends_with(crypto::EXTENSION) {
+                default_name[..default_name.len() - crypto::EXTENSION.len()].to_string()
+            } else {
+                default_name.to_string()
+            }
         };
 
         let mut dialog = rfd::FileDialog::new()
@@ -357,6 +363,7 @@ impl NeuronEncryptApp {
         self.dest_path = None;
         self.status = None;
         self.flow = AppFlow::FileDrop;
+        self.reencrypt_confirmed = false;
     }
 }
 
@@ -372,6 +379,7 @@ impl eframe::App for NeuronEncryptApp {
                 self.selected_file = Some(path.clone());
                 self.flow = AppFlow::Configure;
                 self.mode = if is_vx2_file(&path) { Mode::Decrypt } else { Mode::Encrypt };
+                self.reencrypt_confirmed = false;
             }
         }
         self.poll_crypto();
@@ -432,6 +440,7 @@ impl NeuronEncryptApp {
                        self.selected_file = Some(path.clone());
                        self.flow = AppFlow::Configure;
                        self.mode = if is_vx2_file(&path) { Mode::Decrypt } else { Mode::Encrypt };
+                       self.reencrypt_confirmed = false;
                    }
                 }
                 ui.add_space(20.0);
@@ -500,9 +509,17 @@ impl NeuronEncryptApp {
             ui.add(egui::ProgressBar::new(fraction).fill(strength_color(&strength)));
 
             // FIX BUG-037: Enforce min length
-            const MIN_PASSWORD_LEN: usize = 8;
-            if !self.password.is_empty() && self.password.len() < MIN_PASSWORD_LEN {
-                ui.label(egui::RichText::new(format!("⚠ Minimum {} characters required", MIN_PASSWORD_LEN)).color(Palette::WARNING).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
+            if !self.password.is_empty() && self.password.len() < crypto::MIN_PASSWORD_LEN {
+                ui.label(egui::RichText::new(format!("⚠ Minimum {} characters required", crypto::MIN_PASSWORD_LEN)).color(Palette::WARNING).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
+            }
+
+            // BUG-FIX: Double-encryption confirmation checkbox
+            if self.mode == Mode::Encrypt && self.selected_file.as_ref().map(|p| is_vx2_file(p)).unwrap_or(false) {
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut self.reencrypt_confirmed, "");
+                    ui.label(egui::RichText::new("I understand this file is already encrypted and want to re-encrypt it.").color(Palette::WARNING).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
+                });
             }
 
             ui.add_space(40.0);
@@ -511,7 +528,7 @@ impl NeuronEncryptApp {
             let btn_label = if self.mode == Mode::Encrypt { "PROTECT FILE" } else { "DECRYPT FILE" };
 
             // Disable button if validation fails
-            let can_proceed = self.password.len() >= MIN_PASSWORD_LEN && (self.mode == Mode::Decrypt || *self.password == *self.confirm_password);
+            let can_proceed = self.password.len() >= crypto::MIN_PASSWORD_LEN && (self.mode == Mode::Decrypt || *self.password == *self.confirm_password);
 
             if ui.add_enabled(can_proceed, egui::Button::new(egui::RichText::new(btn_label).strong())
                 .fill(Palette::PRIMARY)

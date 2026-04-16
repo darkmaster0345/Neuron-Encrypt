@@ -12,9 +12,11 @@
 use std::fs;
 use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::FileTimesExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime};
 
 use aes_gcm_siv::{
     aead::{Aead, KeyInit, Payload},
@@ -39,7 +41,10 @@ pub const EXTENSION: &str = ".vx2";
 /// Hard cap on file size to avoid OOM crashes.
 /// AES-256-GCM-SIV requires the entire plaintext in memory at once,
 /// so we cap at 2 GB which is safe on modern 64-bit systems.
-const MAX_FILE_SIZE: u64 = 2_000_000_000;
+pub const MAX_FILE_SIZE: u64 = 2_000_000_000;
+
+/// Minimum passphrase length for security.
+pub const MIN_PASSWORD_LEN: usize = 8;
 
 // ── Progress callback trait ────────────────────────────────────
 // Platform-agnostic: the caller decides how to handle progress.
@@ -48,21 +53,13 @@ pub trait ProgressReporter: Send + Sync {
     fn report(&self, progress: f32, message: &str);
 }
 
-/// Helper: current time in milliseconds since Unix Epoch.
-fn current_time_ms() -> u32 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u32
-}
-
 /// A reporter that only sends messages if they are different from the last
-/// OR if a certain time has passed. Prevents saturating mpsc channels.
+/// OR if a certain time has passed (e.g. 100ms). Prevents saturating mpsc channels.
 /// FIX BUG-001: Redesigned to be Sync using atomics and Mutex.
 pub struct ThrottledReporter<'a> {
     inner: &'a dyn ProgressReporter,
     last_progress: AtomicU32,
-    last_time_ms: AtomicU32,
+    last_time: Mutex<Option<Instant>>,
     last_message: Mutex<String>,
 }
 
@@ -71,7 +68,7 @@ impl<'a> ThrottledReporter<'a> {
         Self {
             inner,
             last_progress: AtomicU32::new(f32::to_bits(-1.0)),
-            last_time_ms: AtomicU32::new(0),
+            last_time: Mutex::new(None),
             last_message: Mutex::new(String::new()),
         }
     }
@@ -79,18 +76,25 @@ impl<'a> ThrottledReporter<'a> {
 
 impl<'a> ProgressReporter for ThrottledReporter<'a> {
     fn report(&self, progress: f32, message: &str) {
-        let now = current_time_ms();
-        let last_time = self.last_time_ms.load(Ordering::Relaxed);
+        let now = Instant::now();
         let last_prog_bits = self.last_progress.load(Ordering::Relaxed);
         let last_prog = f32::from_bits(last_prog_bits);
 
         let mut last_msg = self.last_message.lock().unwrap();
+        let mut last_time_opt = self.last_time.lock().unwrap();
 
-        let time_delta = now.wrapping_sub(last_time);
-        if (progress - last_prog).abs() > 0.01 || time_delta > 100 || *last_msg != message {
+        let should_report = match *last_time_opt {
+            Some(t) => {
+                let time_delta = now.duration_since(t).as_millis();
+                (progress - last_prog).abs() > 0.01 || time_delta > 100 || *last_msg != message
+            }
+            None => true,
+        };
+
+        if should_report {
             self.inner.report(progress, message);
             self.last_progress.store(progress.to_bits(), Ordering::Relaxed);
-            self.last_time_ms.store(now, Ordering::Relaxed);
+            *last_time_opt = Some(now);
             *last_msg = message.to_string();
         }
     }
@@ -285,16 +289,16 @@ pub fn encrypt_file(
         return Err(CryptoError::NotAFile(src.to_path_buf()));
     }
 
-    reporter.report(0.10, "Reading source file…");
-    let plaintext = Zeroizing::new(fs::read(src)?);
-    let source_len = plaintext.len() as u64;
-
+    let source_len = source_metadata.len();
     if source_len > MAX_FILE_SIZE {
         return Err(CryptoError::FileTooLarge {
             size_gb: source_len as f64 / 1_000_000_000.0,
             max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
         });
     }
+
+    reporter.report(0.10, "Reading source file…");
+    let plaintext = Zeroizing::new(fs::read(src)?);
 
     let mut salt = [0u8; SALT_LEN];
     let mut nonce_bytes = [0u8; NONCE_LEN];
