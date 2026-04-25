@@ -144,6 +144,20 @@ fn evaluate_strength(pw: &str) -> (Strength, f32) {
     }
 }
 
+/// Constant-time string comparison to prevent timing side-channels.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let a_bytes = a.as_bytes();
+    let b_bytes = b.as_bytes();
+    if a_bytes.len() != b_bytes.len() {
+        return false;
+    }
+    let mut result = 0;
+    for (x, y) in a_bytes.iter().zip(b_bytes.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
 fn strength_color(strength: &Strength) -> egui::Color32 {
     match strength {
         Strength::None => Palette::BORDER,
@@ -272,7 +286,7 @@ impl NeuronEncryptApp {
                 let mut rng = OsRng;
                 let s: String = (0..16).map(|_| {
                     let v = rng.next_u32() % 16;
-                    std::char::from_digit(v, 16).unwrap()
+                    std::char::from_digit(v, 16).unwrap_or('0')
                 }).collect();
                 // FIX BUG-027: Safe UTF-8 slicing
                 let prefix: String = s.chars().take(6).collect();
@@ -293,7 +307,7 @@ impl NeuronEncryptApp {
         }
 
         // FIX BUG-005: Validate password match
-        if self.mode == Mode::Encrypt && *self.password != *self.confirm_password {
+        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
             self.status = Some(StatusMessage { text: "Passphrases do not match.".to_string(), color: Palette::ERROR });
             return;
         }
@@ -500,7 +514,7 @@ impl NeuronEncryptApp {
                     .hint_text("Confirm passphrase...")
                     .desired_width(f32::INFINITY));
 
-                if !self.confirm_password.is_empty() && *self.password != *self.confirm_password {
+                if !self.confirm_password.is_empty() && !constant_time_eq(&self.password, &self.confirm_password) {
                     ui.label(egui::RichText::new("⚠ Passphrases do not match").color(Palette::ERROR).font(egui::FontId::new(12.0, egui::FontFamily::Proportional)));
                 }
             }
@@ -529,7 +543,7 @@ impl NeuronEncryptApp {
 
             // Disable button if validation fails
             let is_short = self.password.chars().count() < crypto::MIN_PASSWORD_LEN;
-            let password_match = self.mode == Mode::Decrypt || *self.password == *self.confirm_password;
+            let password_match = self.mode == Mode::Decrypt || constant_time_eq(&self.password, &self.confirm_password);
             let reencrypt_gate = if self.mode == Mode::Encrypt && self.selected_file.as_ref().map(|p| is_vx2_file(p)).unwrap_or(false) {
                 self.reencrypt_confirmed
             } else {
