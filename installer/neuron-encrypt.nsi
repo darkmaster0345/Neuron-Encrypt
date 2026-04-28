@@ -65,8 +65,13 @@ SetCompressor /SOLID lzma
 Function .onInit
     ${If} ${RunningX64}
     ${Else}
-        MessageBox MB_OK|MB_ICONSTOP "This application requires a 64-bit version of Windows."
-        Abort
+        ${If} ${Silent}
+            SetErrorLevel 1
+            Abort
+        ${Else}
+            MessageBox MB_OK|MB_ICONSTOP "This application requires a 64-bit version of Windows."
+            Abort
+        ${EndIf}
     ${EndIf}
 FunctionEnd
 
