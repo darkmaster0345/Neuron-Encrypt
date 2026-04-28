@@ -395,3 +395,64 @@ pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TestReporter;
+    impl ProgressReporter for TestReporter {
+        fn report(&self, _progress: f32, _message: &str) {}
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_bytes() {
+        let plaintext = b"Hello, security audit!";
+        let password = b"supersecretpassword";
+
+        let (ciphertext, salt, nonce) = encrypt_bytes(plaintext, password).unwrap();
+        let decrypted = decrypt_bytes(&ciphertext, password, &salt, &nonce).unwrap();
+
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_file() {
+        let tmp_dir = std::env::temp_dir().join(format!("neuron_test_{}", rand_core::RngCore::next_u64(&mut rand_core::OsRng)));
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let src_path = tmp_dir.join("src.txt");
+        let dest_path = tmp_dir.join("dest.vx2");
+        let final_path = tmp_dir.join("final.txt");
+        let password = b"password123";
+        let reporter = TestReporter;
+
+        fs::write(&src_path, b"File content for testing").unwrap();
+
+        encrypt_file(&src_path, &dest_path, password, &reporter).unwrap();
+        assert!(dest_path.exists());
+
+        decrypt_file(&dest_path, &final_path, password, &reporter).unwrap();
+        assert!(final_path.exists());
+
+        let final_content = fs::read(final_path).unwrap();
+        assert_eq!(final_content, b"File content for testing");
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_password_too_short() {
+        let plaintext = b"some data";
+        let password = b"short";
+        let res = encrypt_bytes(plaintext, password);
+        assert!(matches!(res, Err(CryptoError::PassphraseTooShort(_))));
+    }
+
+    #[test]
+    fn test_invalid_magic() {
+        let mut raw = vec![0u8; 100];
+        raw[0..8].copy_from_slice(b"NOTMAGIC");
+        let res = parse_header(&raw);
+        assert!(matches!(res, Err(CryptoError::InvalidMagic)));
+    }
+}

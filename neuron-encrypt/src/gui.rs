@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crossbeam_channel as mpsc;
 use std::time::{Duration, Instant};
 
-use eframe::egui;
+use eframe::egui::{self, WindowLevel};
 use zeroize::Zeroizing;
 use rand_core::{OsRng, RngCore};
 
@@ -188,6 +188,7 @@ pub struct NeuronEncryptApp {
     current_time: String,
     scramble_text: String,
     reencrypt_confirmed: bool,
+    stay_on_top: bool,
 }
 
 /// FIX BUG-007: Case-insensitive VX2 check
@@ -217,6 +218,7 @@ impl NeuronEncryptApp {
             current_time: chrono::Local::now().format("%H:%M:%S").to_string(),
             scramble_text: "INITIALIZING...".to_string(),
             reencrypt_confirmed: false,
+            stay_on_top: false,
         }
     }
 
@@ -284,14 +286,13 @@ impl NeuronEncryptApp {
             self.spinner_index = (self.spinner_index + 1) % 10;
             if self.flow == AppFlow::Processing {
                 let mut rng = OsRng;
-                let s: String = (0..16).map(|_| {
+                let s: String = (0..32).map(|_| {
                     let v = rng.next_u32() % 16;
                     std::char::from_digit(v, 16).unwrap_or('0')
                 }).collect();
-                // FIX BUG-027: Safe UTF-8 slicing
-                let prefix: String = s.chars().take(6).collect();
-                let suffix: String = s.chars().skip(10).take(6).collect();
-                self.scramble_text = format!("{}...{}", prefix, suffix);
+                let prefix: String = s.chars().take(12).collect();
+                let suffix: String = s.chars().skip(20).take(12).collect();
+                self.scramble_text = format!("0x{}...{}", prefix, suffix);
             }
         }
         ctx.request_repaint_after(if self.flow == AppFlow::Processing { Duration::from_millis(16) } else { Duration::from_millis(500) });
@@ -444,7 +445,17 @@ impl NeuronEncryptApp {
         egui::Frame::none().fill(Palette::SURFACE).stroke(egui::Stroke::new(1.0, Palette::BORDER)).rounding(16.0).inner_margin(egui::Margin::same(32.0)).show(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(20.0);
-                ui.label(egui::RichText::new("NEURON").font(egui::FontId::new(40.0, egui::FontFamily::Proportional)).color(Palette::PRIMARY).strong());
+                ui.horizontal(|ui| {
+                    ui.add_space(32.0); // Offset for centering
+                    ui.label(egui::RichText::new("NEURON").font(egui::FontId::new(40.0, egui::FontFamily::Proportional)).color(Palette::PRIMARY).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.selectable_label(self.stay_on_top, "📌").on_hover_text("Always on Top").clicked() {
+                            self.stay_on_top = !self.stay_on_top;
+                            let level = if self.stay_on_top { WindowLevel::AlwaysOnTop } else { WindowLevel::Normal };
+                            ui.ctx().send_viewport_cmd(egui::ViewportCommand::WindowLevel(level));
+                        }
+                    });
+                });
                 ui.add_space(32.0);
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 160.0), egui::Sense::click());
                 ui.painter().rect_stroke(rect, 12.0, egui::Stroke::new(1.0, Palette::BORDER));
@@ -617,6 +628,7 @@ impl NeuronEncryptApp {
     fn draw_footer(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.label(egui::RichText::new("NEURON · PRIVACY FIRST").color(Palette::TEXT_MUTED).font(egui::FontId::new(10.0, egui::FontFamily::Proportional)));
+            ui.label(egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION"))).color(Palette::TEXT_MUTED.gamma_multiply(0.5)).font(egui::FontId::new(9.0, egui::FontFamily::Proportional)));
         });
     }
 }

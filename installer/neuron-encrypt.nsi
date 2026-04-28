@@ -1,3 +1,4 @@
+!include "x64.nsh"
 ; Neuron Encrypt — NSIS Installer Script
 ; NSIS 3.x with Unicode support
 ; Builds: makensis installer/neuron-encrypt.nsi
@@ -61,6 +62,19 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_LANGUAGE "English"
 
 ; ---------------------------------------------------------------------------
+Function .onInit
+    ${If} ${RunningX64}
+    ${Else}
+        ${If} ${Silent}
+            SetErrorLevel 1
+            Abort
+        ${Else}
+            MessageBox MB_OK|MB_ICONSTOP "This application requires a 64-bit version of Windows."
+            Abort
+        ${EndIf}
+    ${EndIf}
+FunctionEnd
+
 ; Installer Sections
 ; ---------------------------------------------------------------------------
 Section "Core Application (required)" SEC_CORE
