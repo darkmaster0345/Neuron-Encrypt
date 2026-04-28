@@ -1,0 +1,18 @@
+<<<<<<< SEARCH
+                let s: String = (0..16).map(|_| {
+                    let v = rng.next_u32() % 16;
+                    std::char::from_digit(v, 16).unwrap_or('0')
+                }).collect();
+                // FIX BUG-027: Safe UTF-8 slicing
+                let prefix: String = s.chars().take(6).collect();
+                let suffix: String = s.chars().skip(10).take(6).collect();
+                self.scramble_text = format!("{}...{}", prefix, suffix);
+=======
+                let s: String = (0..32).map(|_| {
+                    let v = rng.next_u32() % 16;
+                    std::char::from_digit(v, 16).unwrap_or('0')
+                }).collect();
+                let prefix: String = s.chars().take(12).collect();
+                let suffix: String = s.chars().skip(20).take(12).collect();
+                self.scramble_text = format!("0x{}...{}", prefix, suffix);
+>>>>>>> REPLACE
