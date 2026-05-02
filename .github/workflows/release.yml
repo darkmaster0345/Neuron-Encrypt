@@ -101,12 +101,6 @@ jobs:
         run: |
           & "C:\Program Files (x86)\NSIS\makensis.exe" installer/neuron-encrypt.nsi
         shell: pwsh
-      - name: Upload portable artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: NeuronEncrypt-Windows-x64-Portable.exe
-          path: NeuronEncrypt-Windows.exe
-          retention-days: 30
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

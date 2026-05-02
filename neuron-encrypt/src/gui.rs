@@ -9,7 +9,7 @@ use eframe::egui::{self, WindowLevel};
 use zeroize::Zeroizing;
 use rand_core::{OsRng, RngCore};
 
-use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
+use neuron_encrypt_core::crypto::{self, ProgressReporter};
 use neuron_encrypt_core::error::CryptoError;
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -122,13 +122,11 @@ fn evaluate_strength(pw: &str) -> (Strength, f32) {
     let is_repetitive = unique_ratio < 0.3;
     let is_sequential = has_sequential_pattern(pw);
 
-    let mut score = match (pw.len(), variety) {
-        (0..=3, _) => 1,
-        (4..=7, 0..=2) => 3,
-        (4..=7, _) => 5,
-        (8..=11, 0..=2) => 5,
-        (8..=11, _) => 8,
-        (_, _) => 10,
+    let mut score = match pw.len() {
+        0..=3 => 1,
+        4..=7 => if variety >= 3 { 5 } else { 3 },
+        8..=11 => if variety >= 3 { 8 } else { 5 },
+        _ => if variety >= 3 { 10 } else { 7 },
     };
 
     // Adjust score for repetitive/sequential patterns
@@ -184,8 +182,7 @@ pub struct NeuronEncryptApp {
     status: Option<StatusMessage>,
     spinner_index: usize,
     last_spinner_tick: Instant,
-    last_clock_update: Instant,
-    current_time: String,
+
     scramble_text: String,
     reencrypt_confirmed: bool,
     stay_on_top: bool,
@@ -214,8 +211,7 @@ impl NeuronEncryptApp {
             status: None,
             spinner_index: 0,
             last_spinner_tick: Instant::now(),
-            last_clock_update: Instant::now(),
-            current_time: chrono::Local::now().format("%H:%M:%S").to_string(),
+
             scramble_text: "INITIALIZING...".to_string(),
             reencrypt_confirmed: false,
             stay_on_top: false,
@@ -224,7 +220,7 @@ impl NeuronEncryptApp {
 
     fn spinner_char(&self) -> char {
         let chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        chars[self.spinner_index % 10]
+        chars[self.spinner_index % chars.len()]
     }
 
     fn poll_crypto(&mut self) {
@@ -277,10 +273,6 @@ impl NeuronEncryptApp {
 
     fn update_clock_and_spinner(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
-        if now.duration_since(self.last_clock_update) >= Duration::from_secs(1) {
-            self.last_clock_update = now;
-            self.current_time = chrono::Local::now().format("%H:%M:%S").to_string();
-        }
         if now.duration_since(self.last_spinner_tick) >= Duration::from_millis(80) {
             self.last_spinner_tick = now;
             self.spinner_index = (self.spinner_index + 1) % 10;
@@ -344,7 +336,13 @@ impl NeuronEncryptApp {
              dialog = dialog.add_filter("VaultX Container", &["vx2"]);
         }
 
-        let Some(dest) = dialog.save_file() else { return; };
+        let Some(dest) = dialog.save_file() else {
+            self.status = Some(StatusMessage {
+                text: "Save cancelled.".to_string(),
+                color: Palette::TEXT_MUTED,
+            });
+            return;
+        };
         self.dest_path = Some(dest.clone());
 
         let password = self.password.clone();
@@ -355,8 +353,7 @@ impl NeuronEncryptApp {
 
         let ctx_clone = ctx.clone();
         std::thread::spawn(move || {
-            let binding = MpscReporter { tx: tx.clone() };
-            let reporter = ThrottledReporter::new(&binding);
+            let reporter = MpscReporter { tx: tx.clone() };
             let result = if mode == Mode::Encrypt {
                 crypto::encrypt_file(&src, &dest, password.as_bytes(), &reporter)
             } else {
@@ -364,8 +361,8 @@ impl NeuronEncryptApp {
             };
 
             match result {
-                Ok(_) => { let _ = tx.send(GuiMsg::Done("Operation complete".into())); }
-                Err(e) => { let _ = tx.send(GuiMsg::Error(e)); }
+                Ok(_) => { let _ = tx.try_send(GuiMsg::Done("Operation complete".into())); }
+                Err(e) => { let _ = tx.try_send(GuiMsg::Error(e)); }
             }
             ctx_clone.request_repaint();
         });
@@ -483,8 +480,14 @@ impl NeuronEncryptApp {
                     self.flow = AppFlow::FileDrop;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.selectable_label(self.mode == Mode::Encrypt, "ENCRYPT").clicked() { self.mode = Mode::Encrypt; }
-                    if ui.selectable_label(self.mode == Mode::Decrypt, "DECRYPT").clicked() { self.mode = Mode::Decrypt; }
+                    if ui.selectable_label(self.mode == Mode::Encrypt, "ENCRYPT").clicked() {
+                        self.mode = Mode::Encrypt;
+                        self.confirm_password = Zeroizing::new(String::new());
+                    }
+                    if ui.selectable_label(self.mode == Mode::Decrypt, "DECRYPT").clicked() {
+                        self.mode = Mode::Decrypt;
+                        self.confirm_password = Zeroizing::new(String::new());
+                    }
                 });
             });
             ui.add_space(24.0);

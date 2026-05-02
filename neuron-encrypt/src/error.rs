@@ -32,14 +32,8 @@ pub enum CryptoError {
     #[error("Destination file already exists: {0}")]
     FileAlreadyExists(std::path::PathBuf),
 
-    #[error("Write incomplete. Disk full? Expected {expected} bytes, got {actual}")]
-    SizeMismatch { expected: u64, actual: u64 },
-
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("Secure wipe failed for {0}: {1}")]
-    SecureWipeFailed(std::path::PathBuf, String),
     /// BUG-040: Not a regular file.
     #[error("Not a regular file: {0}")]
     NotAFile(std::path::PathBuf),

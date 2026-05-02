@@ -4,7 +4,8 @@ version = "1.0.0"
 edition = "2021"
 description = "Military-grade file encryption — AES-256-GCM-SIV · Argon2id · HKDF-SHA512"
 
-# Expose crypto + error as a library for Android NDK / iOS Swift FFI
+# Library crate exposing crypto and error types for Rust consumers.
+# For C/Swift FFI, additional extern "C" wrappers and cbindgen config are required.
 [lib]
 name = "neuron_encrypt_core"
 path = "src/lib.rs"
