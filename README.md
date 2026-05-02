@@ -92,7 +92,7 @@ Known limitations (by design):
 | Platform | Download |
 |---|---|
 | Windows (x64) | [NeuronEncrypt-Windows-x64.exe](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-| macOS (Universal) | [NeuronEncrypt-macOS](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
+| macOS (Universal — Intel + Apple Silicon) | [NeuronEncrypt-macOS](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
 | Linux (x64) | [NeuronEncrypt-Linux-x64](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
 
 </div>
@@ -132,6 +132,12 @@ cargo build --release
 # Linux   : target/release/neuron-encrypt
 ```
 
+
+### Custom Icon
+Place icon.png (any size, RGBA) at neuron-encrypt/assets/icon.png and icon.ico
+(multi-size ICO, 16/32/48/256px) at neuron-encrypt/assets/icon.ico before building.
+The window icon is loaded at compile time. The installer icon requires the .ico file.
+
 ### Windows Shortcut
 
 Double-click `build.bat` — it installs dependencies
@@ -158,6 +164,12 @@ and builds the .exe automatically.
 3. Enter the same passphrase used to encrypt
 4. Click **DECRYPT →**
 5. Original file restored without `.vx2` extension
+
+
+### Reinstalling / Updating
+Run the installer again — it detects the existing installation automatically,
+terminates any running instance, and overwrites the binary in place.
+Your shortcuts and Start Menu entries are preserved. No uninstall step required.
 
 ### Password Tips
 
