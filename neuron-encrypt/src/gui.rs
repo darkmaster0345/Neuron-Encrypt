@@ -110,19 +110,20 @@ fn evaluate_strength(pw: &str) -> (Strength, f32) {
     if pw.is_empty() { return (Strength::None, 0.0); }
 
     let variety = [
-        pw.chars().any(|c| c.is_ascii_lowercase()),
-        pw.chars().any(|c| c.is_ascii_uppercase()),
-        pw.chars().any(|c| c.is_ascii_digit()),
+        pw.chars().any(|c| c.is_lowercase()),
+        pw.chars().any(|c| c.is_uppercase()),
+        pw.chars().any(|c| c.is_numeric()),
         pw.chars().any(|c| !c.is_alphanumeric()),
     ].iter().filter(|&&b| b).count();
 
     // FIX BUG-014: Enhanced strength check
+    let char_count = pw.chars().count();
     let unique_chars: std::collections::HashSet<char> = pw.chars().collect();
-    let unique_ratio = unique_chars.len() as f32 / pw.len() as f32;
+    let unique_ratio = unique_chars.len() as f32 / char_count as f32;
     let is_repetitive = unique_ratio < 0.3;
     let is_sequential = has_sequential_pattern(pw);
 
-    let mut score = match pw.len() {
+    let mut score = match char_count {
         0..=3 => 1,
         4..=7 => if variety >= 3 { 5 } else { 3 },
         8..=11 => if variety >= 3 { 8 } else { 5 },

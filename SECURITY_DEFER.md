@@ -5,8 +5,8 @@ Description: The `derivative` crate is no longer maintained. It is a transitive 
 Why not fixed: Cargo.lock is a no-touch zone and the dependency is transitive.
 Suggested fix: Wait for `eframe` to update its dependencies or use a patched version.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [RUSTSEC-2024-0384] - `instant` is unmaintained
 Severity: Medium
@@ -15,8 +15,8 @@ Description: The `instant` crate is no longer maintained. Transitive dependency.
 Why not fixed: Cargo.lock is a no-touch zone.
 Suggested fix: Consider alternatives like `web-time`.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [RUSTSEC-2024-0436] - `paste` is unmaintained
 Severity: Medium
@@ -25,8 +25,8 @@ Description: The `paste` crate is no longer maintained. Transitive dependency.
 Why not fixed: Cargo.lock is a no-touch zone.
 Suggested fix: Use `pastey` or `with_builtin_macros`.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [RUSTSEC-2026-0097] - `rand` is unsound
 Severity: High
@@ -35,8 +35,8 @@ Description: Rand is unsound with a custom logger using `rand::rng()`. Transitiv
 Why not fixed: Cargo.lock is a no-touch zone.
 Suggested fix: Update `rand` to a patched version (>=0.8.6).
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [YANKED-UDS-WINDOWS] - `uds_windows` is yanked
 Severity: Medium
@@ -45,8 +45,8 @@ Description: The `uds_windows` v1.2.0 crate is yanked. Transitive dependency.
 Why not fixed: Cargo.lock is a no-touch zone.
 Suggested fix: Update to a non-yanked version.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [UNWRAP-CRYPTO-85] - Unwrap in ProgressReporter impl
 Severity: Medium
@@ -55,8 +55,8 @@ Description: `self.last_message.lock().unwrap()` can panic if the mutex is poiso
 Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
 Suggested fix: Replace `unwrap()` with `expect("mutex poisoned")` or handle the error gracefully.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [UNWRAP-CRYPTO-86] - Unwrap in ProgressReporter impl
 Severity: Medium
@@ -65,8 +65,8 @@ Description: `self.last_time.lock().unwrap()` can panic if the mutex is poisoned
 Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
 Suggested fix: Replace `unwrap()` with `expect("mutex poisoned")` or handle the error gracefully.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [UNWRAP-CRYPTO-100] - Unwrap in ProgressReporter impl
 Severity: Medium
@@ -75,8 +75,8 @@ Description: `self.last_message.lock().unwrap()` can panic if the mutex is poiso
 Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
 Suggested fix: Replace `unwrap()` with `expect("mutex poisoned")` or handle the error gracefully.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
-Attempt count: 1
+Last attempted: 2026-05-01
+Attempt count: 2
 ---
 [UNWRAP-CRYPTO-101] - Unwrap in ProgressReporter impl
 Severity: Medium
@@ -85,5 +85,26 @@ Description: `self.last_time.lock().unwrap()` can panic if the mutex is poisoned
 Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
 Suggested fix: Replace `unwrap()` with `expect("mutex poisoned")` or handle the error gracefully.
 First detected: 2026-04-25
-Last attempted: 2026-04-25
+Last attempted: 2026-05-01
+Attempt count: 2
+---
+[CLIPPY-CRYPTO-UNUSED-IMPORT] - Unused import `SystemTime` in crypto.rs
+Severity: Medium
+Location: neuron-encrypt/src/crypto.rs:20
+Description: The import `SystemTime` is only used in a Windows-specific cfg block but is imported globally.
+Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
+Suggested fix: Move the import inside the `#[cfg(target_os = "windows")]` block or use a cfg-guarded import.
+First detected: 2026-05-01
+Last attempted: 2026-05-01
 Attempt count: 1
+---
+[CRYPTO-TMP-PATH-MISSING-FILENAME] - Potential panic or invalid path in `tmp_path`
+Severity: Low
+Location: neuron-encrypt/src/crypto.rs:135
+Description: `dest.file_name().unwrap_or_default()` returns an empty string if `dest` is a directory or root. This could lead to a temporary file named like `.abcd.tmp` which might be unexpected or fail.
+Why not fixed: neuron-encrypt/src/crypto.rs is a no-touch zone.
+Suggested fix: Handle the case where `file_name()` is None by providing a fallback name.
+First detected: 2026-05-01
+Last attempted: 2026-05-01
+Attempt count: 1
+---
