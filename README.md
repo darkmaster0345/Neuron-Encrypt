@@ -3,7 +3,7 @@
 <div align="center">
 
 ![Neuron Encrypt](https://img.shields.io/badge/Neuron%20Encrypt-v1.0.0-blue?style=for-the-badge&logo=rust)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![License](https://img.shields.io/badge/License-GPLv3-green?style=for-the-badge)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)
 ![Rust](https://img.shields.io/badge/Rust-1.70+-orange?style=for-the-badge&logo=rust)
 
@@ -92,8 +92,7 @@ Known limitations (by design):
 | Platform | Download |
 |---|---|
 | Windows (x64) | [NeuronEncrypt-Windows-x64.exe](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-| macOS (Intel) | [NeuronEncrypt-macOS-Intel](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-| macOS (Apple Silicon) | [NeuronEncrypt-macOS-ARM](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
+| macOS (Universal) | [NeuronEncrypt-macOS](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
 | Linux (x64) | [NeuronEncrypt-Linux-x64](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
 
 </div>

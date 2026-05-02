@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::os::windows::fs::FileTimesExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant};
+use std::time::{Instant, SystemTime};
 
 use aes_gcm_siv::{
     aead::{Aead, KeyInit, Payload},
@@ -124,6 +124,11 @@ fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> 
     Ok(final_key)
 }
 
+/// Constructs the Additional Authenticated Data (AAD) for AES-256-GCM-SIV.
+/// AAD = salt || nonce — both values are stored in the file header in plaintext,
+/// so this binds the ciphertext to its specific header. Any modification to the
+/// header bytes breaks authentication. INVARIANT: if the .vx2 header format changes,
+/// this function MUST be updated to match, or all existing encrypted files become unreadable.
 fn build_aad(salt: &[u8], nonce: &[u8]) -> Vec<u8> {
     let mut aad = Vec::with_capacity(SALT_LEN + NONCE_LEN);
     aad.extend_from_slice(salt);
@@ -132,9 +137,12 @@ fn build_aad(salt: &[u8], nonce: &[u8]) -> Vec<u8> {
 }
 
 fn tmp_path(dest: &Path) -> PathBuf {
+    let mut rng_bytes = [0u8; 4];
+    OsRng.fill_bytes(&mut rng_bytes);
+    let suffix = hex::encode(rng_bytes);
     let mut tmp = dest.to_path_buf();
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
-    tmp.set_file_name(format!("{}.tmp", name));
+    tmp.set_file_name(format!("{}.{}.tmp", name, suffix));
     tmp
 }
 
@@ -292,7 +300,12 @@ pub fn decrypt_file(
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
     let source_metadata = fs::metadata(src)?;
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(CryptoError::PassphraseTooShort(MIN_PASSWORD_LEN));
+    }
     let source_len = source_metadata.len();
+    #[cfg(target_os = "windows")]
+    let (src_accessed, src_modified) = (source_metadata.accessed().ok(), source_metadata.modified().ok());
     if source_len > MAX_FILE_SIZE + HEADER_LEN as u64 {
         return Err(CryptoError::FileTooLarge {
             size_gb: source_len as f64 / 1_000_000_000.0,
@@ -344,8 +357,8 @@ pub fn decrypt_file(
     {
         if let Ok(f) = fs::File::open(dest) {
             let times = fs::FileTimes::new()
-                .set_accessed(source_metadata.accessed().unwrap_or(SystemTime::now()))
-                .set_modified(source_metadata.modified().unwrap_or(SystemTime::now()));
+                .set_accessed(src_accessed.unwrap_or(SystemTime::now()))
+                .set_modified(src_modified.unwrap_or(SystemTime::now()));
             let _ = f.set_times(times);
         }
     }
@@ -355,6 +368,13 @@ pub fn decrypt_file(
 }
 
 // ── Secure Wipe (Forensic Hardening) ───────────────────────────
+/// Attempts a 3-pass random overwrite, rename, and deletion of `path`.
+///
+/// WARNING: This is NOT cryptographically guaranteed on SSDs, APFS, Btrfs, ZFS,
+/// or NTFS with Shadow Copy / Volume Snapshot Service enabled. On these storage
+/// systems, the OS writes to new sectors and old data may persist. For strong
+/// deletion guarantees on SSDs, use OS-native tools (e.g. `SDelete` on Windows,
+/// `Disk Utility Erase` on macOS, `blkdiscard` on Linux).
 pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
     if !path.exists() { return Ok(()); }
     let metadata = fs::metadata(path)?;
@@ -423,7 +443,8 @@ mod tests {
         let src_path = tmp_dir.join("src.txt");
         let dest_path = tmp_dir.join("dest.vx2");
         let final_path = tmp_dir.join("final.txt");
-        let password = b"password123";
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let password = password.as_bytes();
         let reporter = TestReporter;
 
         fs::write(&src_path, b"File content for testing").unwrap();
