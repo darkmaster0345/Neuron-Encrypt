@@ -7,10 +7,10 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel as mpsc;
 use eframe::egui::{
-    self, vec2, Align2, Color32, FontFamily, FontId, Painter, Pos2, Rect, Sense, Shape, Stroke,
-    StrokeKind, ViewportCommand,
+    self, vec2, Align2, Color32, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke,
+    ViewportCommand,
 };
-use neuron_encrypt_core::crypto::{self, ProgressReporter};
+use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
 use neuron_encrypt_core::error::CryptoError;
 use rand_core::{OsRng, RngCore};
 use zeroize::Zeroizing;
@@ -23,7 +23,9 @@ impl Palette {
     const BORDER: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
     const BORDER_FOCUS: Color32 = Color32::from_rgb(0x63, 0x66, 0xF1);
     const ACCENT: Color32 = Color32::from_rgb(0x63, 0x66, 0xF1);
-    const ACCENT_DIM: Color32 = Color32::from_rgba_unmultiplied(99, 102, 241, 18);
+    fn accent_dim() -> Color32 {
+        Color32::from_rgba_unmultiplied(99, 102, 241, 18)
+    }
     const TEXT_HI: Color32 = Color32::from_rgb(0xF5, 0xF5, 0xF5);
     const TEXT_MED: Color32 = Color32::from_rgb(0x9A, 0x9A, 0x9A);
     const TEXT_LO: Color32 = Color32::from_rgb(0x4A, 0x4A, 0x4A);
@@ -31,31 +33,72 @@ impl Palette {
     const ERROR: Color32 = Color32::from_rgb(0xF4, 0x3F, 0x5E);
     const WARNING: Color32 = Color32::from_rgb(0xF5, 0x9E, 0x0B);
 
-    const SURFACE_0: Color32 = Color32::from_rgb(0x0F, 0x0F, 0x0F);
     const SURFACE_1: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
     const SURFACE_2: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
     const BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
     const BORDER_MED: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2A);
-    const BORDER_STRONG: Color32 = Color32::from_rgb(0x3A, 0x3A, 0x3A);
     const ACCENT_HOVER: Color32 = Color32::from_rgb(0x81, 0x8C, 0xF8);
-    const ACCENT_MUTED: Color32 = Color32::from_rgba_unmultiplied(99, 102, 241, 30);
-    const SUCCESS_MUTED: Color32 = Color32::from_rgba_unmultiplied(16, 185, 129, 30);
-    const ERROR_MUTED: Color32 = Color32::from_rgba_unmultiplied(244, 63, 94, 30);
-    const WARNING_MUTED: Color32 = Color32::from_rgba_unmultiplied(245, 158, 11, 30);
+    fn accent_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(99, 102, 241, 30)
+    }
+    fn success_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(16, 185, 129, 30)
+    }
+    fn error_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(244, 63, 94, 30)
+    }
+    fn warning_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(245, 158, 11, 30)
+    }
     const TEXT_ACCENT: Color32 = Color32::from_rgb(0x81, 0x8C, 0xF8);
 }
 
 #[derive(PartialEq, Clone, Copy)]
-enum AppFlow { FileDrop, Configure, Processing, Success, Failure }
-#[derive(PartialEq, Clone, Copy)]
-enum Mode { Encrypt, Decrypt }
-#[derive(PartialEq, Clone, Copy)]
-enum Strength { None, Weak, Fair, Strong, Elite }
+enum AppFlow {
+    FileDrop,
+    Configure,
+    Processing,
+    Success,
+    Failure,
+}
 
-enum GuiMsg { Progress(f32, String), Done(String), Error(CryptoError) }
-struct MpscReporter { tx: mpsc::Sender<GuiMsg> }
+#[derive(PartialEq, Clone, Copy)]
+enum Mode {
+    Encrypt,
+    Decrypt,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Strength {
+    None,
+    Weak,
+    Fair,
+    Strong,
+    Elite,
+}
+
+enum GuiMsg {
+    Progress(f32, String),
+    Done(String),
+    Error(CryptoError),
+}
+
+enum ButtonKind {
+    Primary,
+    Secondary,
+    Segment(bool),
+}
+
+struct MpscReporter {
+    tx: mpsc::Sender<GuiMsg>,
+}
+
 impl ProgressReporter for MpscReporter {
-    fn report(&self, progress: f32, message: &str) { let _ = self.tx.try_send(GuiMsg::Progress(progress, message.to_owned())); }
+    fn report(&self, progress: f32, message: &str) {
+        let _ = self
+            .tx
+            .try_send(GuiMsg::Progress(progress, message.to_owned()));
+    }
 }
 
 pub struct NeuronEncryptApp {
@@ -80,119 +123,1285 @@ pub struct NeuronEncryptApp {
     cancel_flag: Arc<AtomicBool>,
 }
 
-fn is_vx2_file(path: &Path) -> bool { path.extension().and_then(|e| e.to_str()).map(|s| s.eq_ignore_ascii_case("vx2")).unwrap_or(false) }
-fn constant_time_eq(a: &str, b: &str) -> bool { let (ab, bb) = (a.as_bytes(), b.as_bytes()); if ab.len() != bb.len() { return false; } let mut r = 0; for (x,y) in ab.iter().zip(bb.iter()) { r |= x ^ y; } r == 0 }
-fn truncate_chars(s: &str, n: usize) -> String { let mut out = s.chars().take(n).collect::<String>(); if s.chars().count() > n { out.push('…'); } out }
-fn format_size(b: u64) -> String { if b < 1024 { format!("{} B", b) } else if b < 1024*1024 { format!("{:.1} KB", b as f64/1024.0) } else if b < 1024*1024*1024 { format!("{:.1} MB", b as f64/1024.0/1024.0) } else { format!("{:.1} GB", b as f64/1024.0/1024.0/1024.0) } }
-fn strength_color(s: Strength) -> Color32 { match s { Strength::None => Palette::BORDER, Strength::Weak => Palette::ERROR, Strength::Fair => Palette::WARNING, Strength::Strong => Palette::ACCENT, Strength::Elite => Palette::SUCCESS } }
-fn eval_strength(pw: &str) -> (Strength, f32, &'static str) {
-    if pw.is_empty() { return (Strength::None, 0.0, "None"); }
-    let mut score = 0.0;
-    let len = pw.chars().count();
-    if len >= 8 { score += 1.0; } if len >= 12 { score += 1.0; } if len >= 16 { score += 1.0; }
-    if pw.chars().any(|c| c.is_ascii_uppercase()) { score += 1.0; }
-    if pw.chars().any(|c| c.is_ascii_digit()) { score += 1.0; }
-    if pw.chars().any(|c| !c.is_alphanumeric()) { score += 1.0; }
-    score = score.clamp(0.0, 6.0);
-    if score < 2.0 { (Strength::Weak, score/6.0, "Weak") } else if score < 3.5 { (Strength::Fair, score/6.0, "Fair") } else if score < 5.0 { (Strength::Strong, score/6.0, "Strong") } else { (Strength::Elite, score/6.0, "Elite") }
+fn is_vx2_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("vx2"))
+        .unwrap_or(false)
 }
 
-impl NeuronEncryptApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self { Self { mode: Mode::Encrypt, flow: AppFlow::FileDrop, selected_file: None, dest_path: None, password: Zeroizing::new(String::new()), confirm_password: Zeroizing::new(String::new()), show_password: false, crypto_rx: None, progress: 0.0, status: None, spinner_index: 0, last_spinner_tick: Instant::now(), scramble_text: String::from("0x0000...0000"), reencrypt_confirmed: false, stay_on_top: false, strength_frac: 0.0, prog_frac: 0.0, check_anim: 0.0, cancel_flag: Arc::new(AtomicBool::new(false)) } }
-    fn secure_wipe_session(&mut self) { self.password = Zeroizing::new(String::new()); self.confirm_password = Zeroizing::new(String::new()); self.selected_file = None; self.dest_path = None; self.status = None; self.flow = AppFlow::FileDrop; self.reencrypt_confirmed = false; self.strength_frac = 0.0; self.prog_frac = 0.0; self.check_anim = 0.0; self.cancel_flag.store(false, Ordering::SeqCst); }
-    fn execute(&mut self, ctx: &egui::Context) {
-        let Some(file_path) = self.selected_file.clone() else { return; };
-        if self.password.chars().count() < crypto::MIN_PASSWORD_LEN { self.status = Some(format!("Passphrase must be at least {} characters.", crypto::MIN_PASSWORD_LEN)); return; }
-        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) { self.status = Some("Passphrases don't match".to_owned()); return; }
-        if self.mode == Mode::Encrypt && is_vx2_file(&file_path) && !self.reencrypt_confirmed { self.status = Some("Re-encrypt acknowledgement required.".to_owned()); return; }
-        let name = file_path.file_name().unwrap_or_default().to_string_lossy();
-        let dst_name = if self.mode == Mode::Encrypt { format!("{}{}", name, crypto::EXTENSION) } else if name.to_lowercase().ends_with(crypto::EXTENSION) { name[..name.len()-crypto::EXTENSION.len()].to_owned() } else { name.to_string() };
-        let Some(dest) = rfd::FileDialog::new().set_directory(file_path.parent().unwrap_or(Path::new("."))).set_file_name(&dst_name).save_file() else { return; };
-        self.dest_path = Some(dest.clone()); self.progress = 0.0; self.prog_frac = 0.0; self.cancel_flag.store(false, Ordering::SeqCst);
-        let (tx, rx) = mpsc::unbounded(); self.crypto_rx = Some(rx); self.flow = AppFlow::Processing;
-        let password = self.password.clone(); let mode = self.mode; let cancel = Arc::clone(&self.cancel_flag); let ctxc = ctx.clone();
-        std::thread::spawn(move || {
-            let reporter = MpscReporter { tx: tx.clone() };
-            let result = if mode == Mode::Encrypt { crypto::encrypt_file(&file_path, &dest, password.as_bytes(), &reporter) } else { crypto::decrypt_file(&file_path, &dest, password.as_bytes(), &reporter) };
-            match result { Ok(_) => { let _ = tx.try_send(GuiMsg::Done("Operation complete".to_owned())); }, Err(e) => { let _ = tx.try_send(GuiMsg::Error(e)); } }
-            if cancel.load(Ordering::SeqCst) { let _ = tx.try_send(GuiMsg::Done("Cancelled".to_owned())); }
-            ctxc.request_repaint();
-        });
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    if ab.len() != bb.len() {
+        return false;
+    }
+
+    let mut result = 0;
+    for (x, y) in ab.iter().zip(bb.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    let mut out = s.chars().take(n).collect::<String>();
+    if s.chars().count() > n {
+        out.push_str("...");
+    }
+    out
+}
+
+fn sanitize_text(s: &str) -> String {
+    s.trim().to_owned()
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else {
+        format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
     }
 }
 
-impl eframe::App for NeuronEncryptApp { fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-    let dropped = ctx.input(|i| i.raw.dropped_files.clone());
-    if let Some(path) = dropped.first().and_then(|f| f.path.clone()) { self.selected_file = Some(path.clone()); self.flow = AppFlow::Configure; self.mode = if is_vx2_file(&path) { Mode::Decrypt } else { Mode::Encrypt }; }
-    if let Some(rx) = &self.crypto_rx { while let Ok(msg) = rx.try_recv() { match msg { GuiMsg::Progress(p,t) => { self.progress = p; self.status = Some(truncate_chars(&t, 50)); }, GuiMsg::Done(_) => { if !self.cancel_flag.load(Ordering::SeqCst) { self.flow = AppFlow::Success; self.check_anim = 0.0; } else { self.secure_wipe_session(); } self.crypto_rx = None; }, GuiMsg::Error(e) => { if !self.cancel_flag.load(Ordering::SeqCst) { self.flow = AppFlow::Failure; self.status = Some(e.to_string()); } else { self.secure_wipe_session(); } self.crypto_rx = None; } } } }
-    let (_s,target,label) = eval_strength(&self.password); self.strength_frac += (target - self.strength_frac)*0.18; if (target-self.strength_frac).abs() > 0.003 { ctx.request_repaint_after(Duration::from_millis(32)); }
-    if self.flow == AppFlow::Processing { if Instant::now().duration_since(self.last_spinner_tick) >= Duration::from_millis(80) { self.last_spinner_tick = Instant::now(); self.spinner_index = (self.spinner_index+1)%10; let mut rng = OsRng; let s:String=(0..32).map(|_|std::char::from_digit(rng.next_u32()%16,16).unwrap_or('0')).collect(); self.scramble_text = format!("0x{}…{}", &s[..12], &s[20..]); } self.prog_frac += (self.progress-self.prog_frac)*0.15; ctx.request_repaint_after(Duration::from_millis(16)); }
+fn strength_color(strength: Strength) -> Color32 {
+    match strength {
+        Strength::None => Palette::BORDER,
+        Strength::Weak => Palette::ERROR,
+        Strength::Fair => Palette::WARNING,
+        Strength::Strong => Palette::ACCENT,
+        Strength::Elite => Palette::SUCCESS,
+    }
+}
 
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(Palette::BG)).show(ctx, |ui| {
-        self.draw_title_bar(ui);
-        ui.add_space(20.0);
-        ui.vertical_centered(|ui| {
-            egui::Frame::NONE.fill(Palette::SURFACE).stroke(Stroke::new(1.0, Palette::BORDER)).corner_radius(10.0).inner_margin(24.0).show(ui, |ui| {
-                ui.set_width(500.0);
-                match self.flow { AppFlow::FileDrop => self.draw_file_drop(ui), AppFlow::Configure => self.draw_configure(ui, ctx, label), AppFlow::Processing => self.draw_processing(ui), AppFlow::Success => self.draw_result(ui, true), AppFlow::Failure => self.draw_result(ui, false) }
-            });
-            ui.add_space(16.0);
-            ui.label(egui::RichText::new(format!("AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · v{}", env!("CARGO_PKG_VERSION"))).font(FontId::new(11.0, FontFamily::Monospace)).color(Palette::TEXT_LO));
-        });
-    });
-} }
+fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
+    if password.is_empty() {
+        return (Strength::None, 0.0, "None");
+    }
 
-impl NeuronEncryptApp {
-    fn draw_title_bar(&mut self, ui: &mut egui::Ui) {
-        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::hover());
-        let p = ui.painter_at(rect); p.rect_filled(rect, 0.0, Palette::BG); p.line_segment([Pos2::new(rect.min.x, rect.max.y-1.0), Pos2::new(rect.max.x, rect.max.y-1.0)], Stroke::new(1.0, Palette::BORDER));
-        p.text(Pos2::new(rect.min.x+12.0, rect.center().y), Align2::LEFT_CENTER, "NEURON ENCRYPT", FontId::new(13.0, FontFamily::Monospace), Palette::TEXT_HI);
-        let drag = Rect::from_min_max(rect.min, Pos2::new(rect.max.x-72.0, rect.max.y));
-        let drag_resp = ui.interact(drag, ui.id().with("drag"), Sense::click_and_drag()); if drag_resp.dragged() { ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag); }
-        let mut x = rect.max.x - 12.0 - 8.0;
-        for kind in ["close","min","pin"] {
-            let c = Pos2::new(x, rect.center().y); let r = Rect::from_center_size(c, vec2(16.0,16.0));
-            let resp = ui.interact(r, ui.id().with(kind), Sense::click());
-            let col = match kind { "close" if resp.hovered()=>Palette::ERROR, "min" if resp.hovered()=>Palette::WARNING, "pin" if self.stay_on_top=>Palette::ACCENT, _=>Palette::TEXT_LO};
-            p.circle_filled(c, 8.0, col);
-            if resp.clicked() { match kind { "close"=>ui.ctx().send_viewport_cmd(ViewportCommand::Close), "min"=>ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true)), _=>{ self.stay_on_top=!self.stay_on_top; ui.ctx().send_viewport_cmd(ViewportCommand::WindowLevel(if self.stay_on_top { egui::WindowLevel::AlwaysOnTop } else { egui::WindowLevel::Normal })); } } }
-            x -= 26.0;
+    let mut score: f32 = 0.0;
+    let len = password.chars().count();
+
+    if len >= 8 {
+        score += 1.0;
+    }
+    if len >= 12 {
+        score += 1.0;
+    }
+    if len >= 16 {
+        score += 1.0;
+    }
+    if password.chars().any(|c| c.is_ascii_uppercase()) {
+        score += 1.0;
+    }
+    if password.chars().any(|c| c.is_ascii_digit()) {
+        score += 1.0;
+    }
+    if password.chars().any(|c| !c.is_alphanumeric()) {
+        score += 1.0;
+    }
+
+    score = score.clamp(0.0, 6.0);
+    if score < 2.0 {
+        (Strength::Weak, score / 6.0, "Weak")
+    } else if score < 3.5 {
+        (Strength::Fair, score / 6.0, "Fair")
+    } else if score < 5.0 {
+        (Strength::Strong, score / 6.0, "Strong")
+    } else {
+        (Strength::Elite, score / 6.0, "Elite")
+    }
+}
+
+fn preview_output_name(mode: Mode, path: &Path) -> String {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    match mode {
+        Mode::Encrypt => format!("{}{}", name, crypto::EXTENSION),
+        Mode::Decrypt => {
+            if name.to_lowercase().ends_with(crypto::EXTENSION) {
+                name[..name.len() - crypto::EXTENSION.len()].to_owned()
+            } else {
+                name.to_string()
+            }
         }
     }
-    fn draw_file_drop(&mut self, ui: &mut egui::Ui) { ui.vertical_centered(|ui| { ui.label(egui::RichText::new("NEURON ENCRYPT").font(FontId::new(18.0, FontFamily::Monospace)).color(Palette::TEXT_HI).strong()); ui.add_space(16.0); }); let hover_drop = ui.ctx().input(|i| !i.raw.hovered_files.is_empty()); let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 130.0), Sense::click()); let p = ui.painter_at(rect); p.rect_filled(rect, 8.0, if hover_drop { Palette::ACCENT_DIM } else { Color32::TRANSPARENT }); p.rect_stroke(rect, 8.0, Stroke::new(1.0, if hover_drop { Palette::ACCENT } else { Palette::BORDER }), StrokeKind::Outside); p.text(rect.center_top()+vec2(0.0,46.0), Align2::CENTER_CENTER, "Drop file here", FontId::new(13.0, FontFamily::Monospace), Palette::TEXT_MED); p.text(rect.center_top()+vec2(0.0,68.0), Align2::CENTER_CENTER, "or click to browse", FontId::new(11.0, FontFamily::Monospace), Palette::TEXT_LO); if resp.clicked() { if let Some(path)=rfd::FileDialog::new().pick_file() { self.selected_file=Some(path.clone()); self.flow=AppFlow::Configure; self.mode = if is_vx2_file(&path){Mode::Decrypt}else{Mode::Encrypt}; } } }
+}
+
+impl NeuronEncryptApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self {
+            mode: Mode::Encrypt,
+            flow: AppFlow::FileDrop,
+            selected_file: None,
+            dest_path: None,
+            password: Zeroizing::new(String::new()),
+            confirm_password: Zeroizing::new(String::new()),
+            show_password: false,
+            crypto_rx: None,
+            progress: 0.0,
+            status: None,
+            spinner_index: 0,
+            last_spinner_tick: Instant::now(),
+            scramble_text: String::from("0x0000...0000"),
+            reencrypt_confirmed: false,
+            stay_on_top: false,
+            strength_frac: 0.0,
+            prog_frac: 0.0,
+            check_anim: 0.0,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn secure_wipe_session(&mut self) {
+        self.mode = Mode::Encrypt;
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.selected_file = None;
+        self.dest_path = None;
+        self.crypto_rx = None;
+        self.status = None;
+        self.show_password = false;
+        self.flow = AppFlow::FileDrop;
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.reencrypt_confirmed = false;
+        self.strength_frac = 0.0;
+        self.check_anim = 0.0;
+        self.scramble_text = String::from("0x0000...0000");
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    fn set_selected_file(&mut self, path: PathBuf) {
+        self.mode = if is_vx2_file(&path) {
+            Mode::Decrypt
+        } else {
+            Mode::Encrypt
+        };
+        self.selected_file = Some(path);
+        self.dest_path = None;
+        self.flow = AppFlow::Configure;
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.show_password = false;
+        self.status = None;
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.reencrypt_confirmed = false;
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    fn pick_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().pick_file() {
+            self.set_selected_file(path);
+        }
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.confirm_password = Zeroizing::new(String::new());
+            self.status = None;
+            self.reencrypt_confirmed = false;
+        }
+    }
+
+    fn screen_badge(&self) -> (&'static str, Color32, Color32) {
+        match self.flow {
+            AppFlow::FileDrop => ("LOCAL ONLY", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::Configure => match self.mode {
+                Mode::Encrypt => ("ENCRYPT", Palette::accent_muted(), Palette::TEXT_ACCENT),
+                Mode::Decrypt => ("DECRYPT", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            },
+            AppFlow::Processing => ("PROCESSING", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::Success => ("COMPLETE", Palette::success_muted(), Palette::SUCCESS),
+            AppFlow::Failure => ("ERROR", Palette::error_muted(), Palette::ERROR),
+        }
+    }
+
+    fn screen_title(&self) -> &'static str {
+        match self.flow {
+            AppFlow::FileDrop => "Protect a file on this device",
+            AppFlow::Configure => match self.mode {
+                Mode::Encrypt => "Review the file and encrypt it",
+                Mode::Decrypt => "Review the file and decrypt it",
+            },
+            AppFlow::Processing => "Working on your file",
+            AppFlow::Success => match self.mode {
+                Mode::Encrypt => "Encryption complete",
+                Mode::Decrypt => "Decryption complete",
+            },
+            AppFlow::Failure => "The operation did not finish",
+        }
+    }
+
+    fn screen_subtitle(&self) -> &'static str {
+        match self.flow {
+            AppFlow::FileDrop => {
+                "Drag a file here or browse from disk. Everything stays local to this machine."
+            }
+            AppFlow::Configure => {
+                "Choose the mode, enter a passphrase, and save the output as a new file."
+            }
+            AppFlow::Processing => {
+                "The current run is happening locally. Keep this window open until it finishes."
+            }
+            AppFlow::Success => {
+                "Your output file is ready. You can open its folder or start another run."
+            }
+            AppFlow::Failure => "Review the message below, then return to the start and try again.",
+        }
+    }
+
+    fn action_label(&self) -> &'static str {
+        match self.mode {
+            Mode::Encrypt => "Encrypt file",
+            Mode::Decrypt => "Decrypt file",
+        }
+    }
+
+    fn execute(&mut self, ctx: &egui::Context) {
+        let Some(file_path) = self.selected_file.clone() else {
+            return;
+        };
+
+        if self.password.chars().count() < crypto::MIN_PASSWORD_LEN {
+            self.status = Some(format!(
+                "Passphrase must be at least {} characters.",
+                crypto::MIN_PASSWORD_LEN
+            ));
+            return;
+        }
+
+        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
+            self.status = Some("Passphrases do not match.".to_owned());
+            return;
+        }
+
+        if self.mode == Mode::Encrypt && is_vx2_file(&file_path) && !self.reencrypt_confirmed {
+            self.status = Some("Re-encrypt acknowledgement required.".to_owned());
+            return;
+        }
+
+        let dst_name = preview_output_name(self.mode, &file_path);
+        let Some(dest) = rfd::FileDialog::new()
+            .set_directory(file_path.parent().unwrap_or(Path::new(".")))
+            .set_file_name(&dst_name)
+            .save_file()
+        else {
+            return;
+        };
+
+        self.dest_path = Some(dest.clone());
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.status = Some("Preparing secure file operation...".to_owned());
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        let (tx, rx) = mpsc::unbounded();
+        self.crypto_rx = Some(rx);
+        self.flow = AppFlow::Processing;
+
+        let password = self.password.clone();
+        let mode = self.mode;
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            let reporter = MpscReporter { tx: tx.clone() };
+            let throttled_reporter = ThrottledReporter::new(&reporter);
+            let result = if mode == Mode::Encrypt {
+                crypto::encrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+            } else {
+                crypto::decrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+            };
+
+            match result {
+                Ok(_) => {
+                    let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned()));
+                }
+                Err(e) => {
+                    let _ = tx.try_send(GuiMsg::Error(e));
+                }
+            }
+
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn draw_title_bar(&mut self, ui: &mut egui::Ui) {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(rect, 0.0, Palette::BG);
+        painter.line_segment(
+            [
+                Pos2::new(rect.min.x, rect.max.y - 1.0),
+                Pos2::new(rect.max.x, rect.max.y - 1.0),
+            ],
+            Stroke::new(1.0, Palette::BORDER),
+        );
+
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(rect.min.x + 16.0, rect.min.y + 12.0),
+                Pos2::new(rect.min.x + 24.0, rect.min.y + 20.0),
+            ),
+            3.0,
+            Palette::ACCENT,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + 32.0, rect.min.y + 9.0),
+            Align2::LEFT_TOP,
+            "NEURON ENCRYPT",
+            FontId::new(13.0, FontFamily::Monospace),
+            Palette::TEXT_HI,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + 32.0, rect.min.y + 25.0),
+            Align2::LEFT_TOP,
+            "Secure local file encryption",
+            FontId::new(10.0, FontFamily::Monospace),
+            Palette::TEXT_LO,
+        );
+
+        let drag_rect = Rect::from_min_max(
+            Pos2::new(rect.min.x, rect.min.y),
+            Pos2::new(rect.max.x - 126.0, rect.max.y),
+        );
+        let drag_response = ui.interact(drag_rect, ui.id().with("drag"), Sense::click_and_drag());
+        if drag_response.dragged() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+
+        let mut x = rect.max.x - 12.0;
+        for (kind, label, width) in [
+            ("close", "X", 30.0),
+            ("min", "-", 30.0),
+            ("pin", if self.stay_on_top { "PINNED" } else { "PIN" }, 54.0),
+        ] {
+            let button_rect = Rect::from_min_max(
+                Pos2::new(x - width, rect.center().y - 12.0),
+                Pos2::new(x, rect.center().y + 12.0),
+            );
+            let response = ui.interact(button_rect, ui.id().with(kind), Sense::click());
+
+            let (fill, stroke_color, text_color) = match kind {
+                "close" if response.hovered() => {
+                    (Palette::error_muted(), Palette::ERROR, Palette::ERROR)
+                }
+                "min" if response.hovered() => {
+                    (Palette::warning_muted(), Palette::WARNING, Palette::WARNING)
+                }
+                "pin" if self.stay_on_top || response.hovered() => (
+                    Palette::accent_muted(),
+                    Palette::ACCENT,
+                    Palette::TEXT_ACCENT,
+                ),
+                _ => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
+            };
+
+            painter.rect_filled(button_rect, 7.0, fill);
+            painter.rect_stroke(button_rect, 7.0, Stroke::new(1.0, stroke_color));
+            painter.text(
+                button_rect.center(),
+                Align2::CENTER_CENTER,
+                label,
+                FontId::new(10.5, FontFamily::Monospace),
+                text_color,
+            );
+
+            if response.clicked() {
+                match kind {
+                    "close" => ui.ctx().send_viewport_cmd(ViewportCommand::Close),
+                    "min" => ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true)),
+                    _ => {
+                        self.stay_on_top = !self.stay_on_top;
+                        ui.ctx().send_viewport_cmd(ViewportCommand::WindowLevel(
+                            if self.stay_on_top {
+                                egui::WindowLevel::AlwaysOnTop
+                            } else {
+                                egui::WindowLevel::Normal
+                            },
+                        ));
+                    }
+                }
+            }
+
+            x -= width + 8.0;
+        }
+    }
+
+    fn draw_screen_header(&self, ui: &mut egui::Ui) {
+        let (badge, fill, text_color) = self.screen_badge();
+        egui::Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, Palette::BORDER_MED))
+            .rounding(999.0)
+            .inner_margin(6.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(badge)
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(text_color),
+                );
+            });
+
+        ui.add_space(14.0);
+        ui.label(
+            egui::RichText::new(self.screen_title())
+                .font(FontId::new(24.0, FontFamily::Monospace))
+                .color(Palette::TEXT_HI)
+                .strong(),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(self.screen_subtitle())
+                .font(FontId::new(11.5, FontFamily::Monospace))
+                .color(Palette::TEXT_MED),
+        );
+    }
+
+    fn draw_button(
+        &self,
+        ui: &mut egui::Ui,
+        label: &str,
+        size: egui::Vec2,
+        kind: ButtonKind,
+        enabled: bool,
+    ) -> egui::Response {
+        let sense = if enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let (rect, response) = ui.allocate_exact_size(size, sense);
+        let painter = ui.painter_at(rect);
+
+        let (fill, stroke_color, text_color) = match kind {
+            ButtonKind::Primary if !enabled => {
+                (Palette::SURFACE_HI, Palette::BORDER, Palette::TEXT_LO)
+            }
+            ButtonKind::Primary if response.hovered() => (
+                Palette::ACCENT_HOVER,
+                Palette::ACCENT_HOVER,
+                Palette::TEXT_HI,
+            ),
+            ButtonKind::Primary => (Palette::ACCENT, Palette::ACCENT, Palette::TEXT_HI),
+            ButtonKind::Secondary if response.hovered() => {
+                (Palette::SURFACE_2, Palette::BORDER_MED, Palette::TEXT_HI)
+            }
+            ButtonKind::Secondary => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
+            ButtonKind::Segment(true) => {
+                (Palette::accent_muted(), Palette::ACCENT, Palette::TEXT_HI)
+            }
+            ButtonKind::Segment(false) if response.hovered() => {
+                (Palette::SURFACE_2, Palette::BORDER_MED, Palette::TEXT_HI)
+            }
+            ButtonKind::Segment(false) => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
+        };
+
+        painter.rect_filled(rect, 8.0, fill);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, stroke_color));
+        painter.text(
+            rect.center(),
+            Align2::CENTER_CENTER,
+            label,
+            FontId::new(12.0, FontFamily::Monospace),
+            text_color,
+        );
+
+        response
+    }
+
+    fn draw_info_chip(&self, ui: &mut egui::Ui, label: &str, fill: Color32, text_color: Color32) {
+        egui::Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, Palette::BORDER))
+            .rounding(999.0)
+            .inner_margin(6.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .font(FontId::new(10.0, FontFamily::Monospace))
+                        .color(text_color),
+                );
+            });
+    }
+
+    fn draw_file_drop(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(20.0);
+
+        let hover_drop = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
+        let (rect, response) =
+            ui.allocate_exact_size(vec2(ui.available_width(), 170.0), Sense::click());
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(
+            rect,
+            12.0,
+            if hover_drop {
+                Palette::accent_dim()
+            } else {
+                Palette::SURFACE_1
+            },
+        );
+        painter.rect_stroke(
+            rect,
+            12.0,
+            Stroke::new(
+                1.0,
+                if hover_drop {
+                    Palette::ACCENT
+                } else {
+                    Palette::BORDER_MED
+                },
+            ),
+        );
+        painter.text(
+            rect.center_top() + vec2(0.0, 42.0),
+            Align2::CENTER_CENTER,
+            if hover_drop {
+                "Release to select this file"
+            } else {
+                "Drag a file here"
+            },
+            FontId::new(15.0, FontFamily::Monospace),
+            Palette::TEXT_HI,
+        );
+        painter.text(
+            rect.center_top() + vec2(0.0, 70.0),
+            Align2::CENTER_CENTER,
+            "Encrypt normal files and open .vx2 files for decryption.",
+            FontId::new(11.0, FontFamily::Monospace),
+            Palette::TEXT_MED,
+        );
+        painter.text(
+            rect.center_top() + vec2(0.0, 100.0),
+            Align2::CENTER_CENTER,
+            "Click anywhere in this area to browse from disk.",
+            FontId::new(10.5, FontFamily::Monospace),
+            Palette::TEXT_LO,
+        );
+
+        if response.clicked() {
+            self.pick_file();
+        }
+
+        ui.add_space(16.0);
+        ui.horizontal_centered(|ui| {
+            self.draw_info_chip(
+                ui,
+                "LOCAL ONLY",
+                Palette::accent_muted(),
+                Palette::TEXT_ACCENT,
+            );
+            ui.add_space(8.0);
+            self.draw_info_chip(
+                ui,
+                "ORIGINAL FILE UNTOUCHED",
+                Palette::SURFACE_1,
+                Palette::TEXT_MED,
+            );
+        });
+
+        ui.add_space(20.0);
+        ui.horizontal_centered(|ui| {
+            if self
+                .draw_button(
+                    ui,
+                    "Browse files",
+                    vec2(160.0, 40.0),
+                    ButtonKind::Secondary,
+                    true,
+                )
+                .clicked()
+            {
+                self.pick_file();
+            }
+        });
+    }
+
+    fn draw_file_summary(&mut self, ui: &mut egui::Ui) {
+        let Some(path) = self.selected_file.clone() else {
+            return;
+        };
+
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let location = path
+            .parent()
+            .map(|parent| truncate_chars(&parent.display().to_string(), 52))
+            .unwrap_or_else(|| String::from("."));
+        let size = std::fs::metadata(&path)
+            .map(|meta| format_size(meta.len()))
+            .unwrap_or_else(|_| String::from("Unknown size"));
+        let output = preview_output_name(self.mode, &path);
+
+        egui::Frame::none()
+            .fill(Palette::SURFACE_1)
+            .stroke(Stroke::new(1.0, Palette::BORDER))
+            .rounding(10.0)
+            .inner_margin(14.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new("SELECTED FILE")
+                                .font(FontId::new(10.0, FontFamily::Monospace))
+                                .color(Palette::TEXT_ACCENT),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(truncate_chars(&name, 42))
+                                .font(FontId::new(14.0, FontFamily::Monospace))
+                                .color(Palette::TEXT_HI),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(location)
+                                .font(FontId::new(10.5, FontFamily::Monospace))
+                                .color(Palette::TEXT_LO),
+                        );
+                    });
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        if self
+                            .draw_button(
+                                ui,
+                                "Change file",
+                                vec2(110.0, 34.0),
+                                ButtonKind::Secondary,
+                                true,
+                            )
+                            .clicked()
+                        {
+                            self.pick_file();
+                        }
+                    });
+                });
+
+                ui.add_space(12.0);
+                let (divider, _) =
+                    ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                ui.painter_at(divider).line_segment(
+                    [divider.left_center(), divider.right_center()],
+                    Stroke::new(1.0, Palette::BORDER_SUBTLE),
+                );
+                ui.add_space(12.0);
+
+                ui.label(
+                    egui::RichText::new(format!("Size   {}", size))
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_MED),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(format!("Output {}", truncate_chars(&output, 44)))
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_MED),
+                );
+            });
+    }
+
+    fn draw_mode_toggle(&mut self, ui: &mut egui::Ui) {
+        let button_width = (ui.available_width() - 8.0) * 0.5;
+        ui.horizontal(|ui| {
+            if self
+                .draw_button(
+                    ui,
+                    "Encrypt",
+                    vec2(button_width, 36.0),
+                    ButtonKind::Segment(self.mode == Mode::Encrypt),
+                    true,
+                )
+                .clicked()
+            {
+                self.set_mode(Mode::Encrypt);
+            }
+
+            if self
+                .draw_button(
+                    ui,
+                    "Decrypt",
+                    vec2(button_width, 36.0),
+                    ButtonKind::Segment(self.mode == Mode::Decrypt),
+                    true,
+                )
+                .clicked()
+            {
+                self.set_mode(Mode::Decrypt);
+            }
+        });
+    }
+
+    fn draw_password_row(&mut self, ui: &mut egui::Ui, label: &str, primary: bool) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(label)
+                    .font(FontId::new(11.5, FontFamily::Monospace))
+                    .color(Palette::TEXT_MED),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self
+                    .draw_button(
+                        ui,
+                        if self.show_password { "Hide" } else { "Show" },
+                        vec2(64.0, 30.0),
+                        ButtonKind::Secondary,
+                        true,
+                    )
+                    .clicked()
+                {
+                    self.show_password = !self.show_password;
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+
+        let total_width = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(vec2(total_width, 42.0), Sense::hover());
+        let id = if primary {
+            ui.id().with("pw")
+        } else {
+            ui.id().with("cpw")
+        };
+        let focus = ui.memory(|memory| memory.has_focus(id));
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(rect, 8.0, Palette::SURFACE_HI);
+        painter.rect_stroke(
+            rect,
+            8.0,
+            Stroke::new(
+                1.0,
+                if focus {
+                    Palette::BORDER_FOCUS
+                } else {
+                    Palette::BORDER
+                },
+            ),
+        );
+
+        let input_rect =
+            Rect::from_min_max(rect.min + vec2(12.0, 11.0), rect.max - vec2(12.0, 11.0));
+        ui.allocate_ui_at_rect(input_rect, |ui| {
+            let edit = if primary {
+                egui::TextEdit::singleline(&mut *self.password).id(id)
+            } else {
+                egui::TextEdit::singleline(&mut *self.confirm_password).id(id)
+            };
+            ui.add(edit.frame(false).password(!self.show_password));
+        });
+    }
+
+    fn draw_strength_meter(&self, ui: &mut egui::Ui, label: &str) {
+        let strength = eval_strength(&self.password).0;
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Strength")
+                    .font(FontId::new(11.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_MED),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .font(FontId::new(11.0, FontFamily::Monospace))
+                        .color(strength_color(strength)),
+                );
+            });
+        });
+
+        ui.add_space(6.0);
+        let (bar_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 5.0), Sense::hover());
+        let painter = ui.painter_at(bar_rect);
+        painter.rect_filled(bar_rect, 3.0, Palette::BORDER);
+        let fill_rect = Rect::from_min_max(
+            bar_rect.min,
+            Pos2::new(
+                bar_rect.min.x + bar_rect.width() * self.strength_frac,
+                bar_rect.max.y,
+            ),
+        );
+        painter.rect_filled(fill_rect, 3.0, strength_color(strength));
+
+        ui.add_space(8.0);
+        ui.label(
+            egui::RichText::new(format!(
+                "Use at least {} characters. Longer phrases with numbers and symbols score better.",
+                crypto::MIN_PASSWORD_LEN
+            ))
+            .font(FontId::new(10.5, FontFamily::Monospace))
+            .color(Palette::TEXT_LO),
+        );
+    }
+
+    fn draw_notice(
+        &self,
+        ui: &mut egui::Ui,
+        title: &str,
+        body: &str,
+        fill: Color32,
+        border: Color32,
+        text: Color32,
+    ) {
+        egui::Frame::none()
+            .fill(fill)
+            .stroke(Stroke::new(1.0, border))
+            .rounding(8.0)
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(title)
+                        .font(FontId::new(11.0, FontFamily::Monospace))
+                        .color(text)
+                        .strong(),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(body)
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_MED),
+                );
+            });
+    }
+
     fn draw_configure(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, strength_label: &str) {
         ui.horizontal(|ui| {
-            if ui.add(egui::Label::new(egui::RichText::new("← Back").font(FontId::new(11.0, FontFamily::Monospace)).color(Palette::TEXT_LO)).sense(Sense::click())).clicked() { self.password = Zeroizing::new(String::new()); self.confirm_password = Zeroizing::new(String::new()); self.flow = AppFlow::FileDrop; }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { let (r,resp)=ui.allocate_exact_size(vec2(96.0,26.0), Sense::click()); let p=ui.painter_at(r); p.rect_stroke(r,13.0,Stroke::new(1.0,Palette::BORDER),StrokeKind::Outside); let left=Rect::from_min_max(r.min, Pos2::new(r.center().x, r.max.y)); let right=Rect::from_min_max(Pos2::new(r.center().x,r.min.y), r.max); p.rect_filled(if self.mode==Mode::Encrypt{left}else{right},13.0,Palette::ACCENT); p.text(left.center(),Align2::CENTER_CENTER,"ENC",FontId::new(11.0,FontFamily::Monospace),if self.mode==Mode::Encrypt{Palette::TEXT_HI}else{Palette::TEXT_LO}); p.text(right.center(),Align2::CENTER_CENTER,"DEC",FontId::new(11.0,FontFamily::Monospace),if self.mode==Mode::Decrypt{Palette::TEXT_HI}else{Palette::TEXT_LO}); if resp.clicked() { self.mode = if ui.input(|i| i.pointer.latest_pos().unwrap_or(r.center()).x < r.center().x) { Mode::Encrypt } else { Mode::Decrypt }; self.confirm_password=Zeroizing::new(String::new()); } });
+            if self
+                .draw_button(ui, "< Back", vec2(92.0, 34.0), ButtonKind::Secondary, true)
+                .clicked()
+            {
+                self.secure_wipe_session();
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.draw_mode_toggle(ui);
+            });
         });
-        ui.add_space(12.0);
-        if let Some(path)=&self.selected_file { let name = path.file_name().unwrap_or_default().to_string_lossy(); ui.label(egui::RichText::new(truncate_chars(&name,40)).font(FontId::new(14.0,FontFamily::Monospace)).color(Palette::TEXT_HI)); if let Ok(meta)=std::fs::metadata(path) { ui.label(egui::RichText::new(format_size(meta.len())).font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::TEXT_LO)); } }
-        ui.add_space(14.0); let (d,_) = ui.allocate_exact_size(vec2(ui.available_width(),1.0), Sense::hover()); ui.painter_at(d).line_segment([d.left_center(), d.right_center()], Stroke::new(1.0, Palette::BORDER_SUBTLE)); ui.add_space(14.0);
-        ui.label(egui::RichText::new("Passphrase").font(FontId::new(12.0, FontFamily::Monospace)).color(Palette::TEXT_MED)); ui.add_space(6.0);
-        self.draw_password_input(ui, true);
-        if self.mode==Mode::Encrypt { ui.add_space(8.0); self.draw_password_input(ui, false); if !self.password.is_empty() && !self.confirm_password.is_empty() && !constant_time_eq(&self.password, &self.confirm_password) { ui.label(egui::RichText::new("Passphrases don't match").font(FontId::new(11.0, FontFamily::Monospace)).color(Palette::ERROR)); } }
-        ui.add_space(8.0);
-        let (br,_) = ui.allocate_exact_size(vec2(ui.available_width()-80.0,3.0), Sense::hover()); let p=ui.painter_at(br); p.rect_filled(br,2.0,Palette::BORDER); let fill=Rect::from_min_max(br.min, Pos2::new(br.min.x+br.width()*self.strength_frac, br.max.y)); p.rect_filled(fill,2.0,strength_color(eval_strength(&self.password).0)); ui.put(Rect::from_min_size(Pos2::new(br.max.x+8.0, br.min.y-6.0), vec2(60.0,16.0)), egui::Label::new(egui::RichText::new(strength_label).font(FontId::new(11.0, FontFamily::Monospace)).color(Palette::TEXT_MED)));
-        if self.mode==Mode::Encrypt && self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p)) { ui.add_space(8.0); egui::Frame::NONE.fill(Palette::WARNING_MUTED).stroke(Stroke::new(1.0, Palette::WARNING)).corner_radius(6.0).inner_margin(10.0).show(ui, |ui| { ui.checkbox(&mut self.reencrypt_confirmed, "I understand this will re-encrypt an existing .vx2 file"); }); }
+
+        ui.add_space(16.0);
+        self.draw_file_summary(ui);
+
+        ui.add_space(18.0);
+        self.draw_password_row(ui, "Passphrase", true);
+
+        if self.mode == Mode::Encrypt {
+            ui.add_space(12.0);
+            self.draw_password_row(ui, "Confirm passphrase", false);
+
+            if !self.password.is_empty()
+                && !self.confirm_password.is_empty()
+                && !constant_time_eq(&self.password, &self.confirm_password)
+            {
+                ui.add_space(8.0);
+                self.draw_notice(
+                    ui,
+                    "Passphrases do not match",
+                    "Enter the same passphrase in both fields before continuing.",
+                    Palette::error_muted(),
+                    Palette::ERROR,
+                    Palette::ERROR,
+                );
+            }
+        }
+
+        ui.add_space(14.0);
+        self.draw_strength_meter(ui, strength_label);
+
+        if self.mode == Mode::Encrypt
+            && self
+                .selected_file
+                .as_ref()
+                .is_some_and(|path| is_vx2_file(path))
+        {
+            ui.add_space(14.0);
+            egui::Frame::none()
+                .fill(Palette::warning_muted())
+                .stroke(Stroke::new(1.0, Palette::WARNING))
+                .rounding(8.0)
+                .inner_margin(12.0)
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Re-encrypting an existing .vx2 file")
+                            .font(FontId::new(11.0, FontFamily::Monospace))
+                            .color(Palette::WARNING)
+                            .strong(),
+                    );
+                    ui.add_space(6.0);
+                    ui.checkbox(
+                        &mut self.reencrypt_confirmed,
+                        "I understand this will encrypt a file that is already encrypted.",
+                    );
+                });
+        }
+
+        if let Some(status) = &self.status {
+            ui.add_space(14.0);
+            self.draw_notice(
+                ui,
+                "Status",
+                status,
+                Palette::SURFACE_1,
+                Palette::BORDER,
+                Palette::TEXT_ACCENT,
+            );
+        }
+
         ui.add_space(20.0);
-        let mismatch = self.mode==Mode::Encrypt && !self.password.is_empty() && !self.confirm_password.is_empty() && !constant_time_eq(&self.password,&self.confirm_password);
-        let disabled = self.password.chars().count() < crypto::MIN_PASSWORD_LEN || mismatch || (self.mode==Mode::Encrypt && self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p)) && !self.reencrypt_confirmed);
-        let (r,resp) = ui.allocate_exact_size(vec2(452.0,42.0), Sense::click()); let p=ui.painter_at(r); let fill = if disabled { Palette::SURFACE_HI } else if resp.hovered() { Palette::ACCENT_HOVER } else { Palette::ACCENT }; p.rect_filled(r,6.0,fill); p.text(r.center(),Align2::CENTER_CENTER,if self.mode==Mode::Encrypt{"Encrypt file →"}else{"Decrypt file →"},FontId::new(13.0,FontFamily::Monospace),if disabled{Palette::TEXT_LO}else{Palette::TEXT_HI}); if resp.clicked() && !disabled { self.execute(ctx); }
+
+        let mismatch = self.mode == Mode::Encrypt
+            && !self.password.is_empty()
+            && !self.confirm_password.is_empty()
+            && !constant_time_eq(&self.password, &self.confirm_password);
+        let disabled = self.password.chars().count() < crypto::MIN_PASSWORD_LEN
+            || mismatch
+            || (self.mode == Mode::Encrypt
+                && self
+                    .selected_file
+                    .as_ref()
+                    .is_some_and(|path| is_vx2_file(path))
+                && !self.reencrypt_confirmed);
+
+        if self
+            .draw_button(
+                ui,
+                self.action_label(),
+                vec2(ui.available_width(), 44.0),
+                ButtonKind::Primary,
+                !disabled,
+            )
+            .clicked()
+            && !disabled
+        {
+            self.execute(ctx);
+        }
     }
-    fn draw_password_input(&mut self, ui: &mut egui::Ui, primary: bool) {
-        let (rect, _) = ui.allocate_exact_size(vec2(452.0, 38.0), Sense::hover());
-        let focus = if primary { ui.memory(|m| m.has_focus(ui.id().with("pw"))) } else { ui.memory(|m| m.has_focus(ui.id().with("cpw"))) };
-        let p = ui.painter_at(rect);
-        p.rect_filled(rect, 6.0, Palette::SURFACE_HI);
-        p.rect_stroke(rect, 6.0, Stroke::new(1.0, if focus { Palette::BORDER_FOCUS } else { Palette::BORDER }), StrokeKind::Outside);
-        let input = Rect::from_min_max(rect.min + vec2(10.0, 9.0), Pos2::new(rect.max.x - 34.0, rect.max.y - 9.0));
-        ui.allocate_ui_at_rect(input, |ui| {
-            let mut te = if primary { egui::TextEdit::singleline(&mut *self.password).id(ui.id().with("pw")) } else { egui::TextEdit::singleline(&mut *self.confirm_password).id(ui.id().with("cpw")) };
-            ui.add(te.frame(false).password(!self.show_password));
+
+    fn draw_progress_meter(&self, ui: &mut egui::Ui) {
+        let (bar_rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 7.0), Sense::hover());
+        let painter = ui.painter_at(bar_rect);
+        painter.rect_filled(bar_rect, 4.0, Palette::SURFACE_HI);
+        painter.rect_filled(
+            Rect::from_min_max(
+                bar_rect.min,
+                Pos2::new(
+                    bar_rect.min.x + bar_rect.width() * self.prog_frac,
+                    bar_rect.max.y,
+                ),
+            ),
+            4.0,
+            Palette::ACCENT,
+        );
+    }
+
+    fn draw_processing(&mut self, ui: &mut egui::Ui) {
+        let spinner = ["|", "/", "-", "\\"];
+        let percent = (self.prog_frac * 100.0).round() as u32;
+
+        ui.add_space(20.0);
+        ui.vertical_centered(|ui| {
+            ui.label(
+                egui::RichText::new(spinner[self.spinner_index % spinner.len()])
+                    .font(FontId::new(28.0, FontFamily::Monospace))
+                    .color(Palette::ACCENT),
+            );
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(format!("{}%", percent))
+                    .font(FontId::new(26.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_HI)
+                    .strong(),
+            );
+        });
+
+        ui.add_space(16.0);
+        self.draw_progress_meter(ui);
+        ui.add_space(14.0);
+
+        ui.label(
+            egui::RichText::new(truncate_chars(
+                self.status
+                    .as_deref()
+                    .unwrap_or("Processing your file locally."),
+                72,
+            ))
+            .font(FontId::new(11.0, FontFamily::Monospace))
+            .color(Palette::TEXT_MED),
+        );
+        ui.add_space(12.0);
+
+        egui::Frame::none()
+            .fill(Palette::SURFACE_1)
+            .stroke(Stroke::new(1.0, Palette::BORDER))
+            .rounding(8.0)
+            .inner_margin(12.0)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new("ACTIVITY")
+                        .font(FontId::new(10.0, FontFamily::Monospace))
+                        .color(Palette::TEXT_ACCENT),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(&self.scramble_text)
+                        .font(FontId::new(11.0, FontFamily::Monospace))
+                        .color(Palette::TEXT_LO),
+                );
+            });
+
+        ui.add_space(14.0);
+        ui.label(
+            egui::RichText::new(
+                "This run cannot be force-cancelled from the GUI once it has started.",
+            )
+            .font(FontId::new(10.5, FontFamily::Monospace))
+            .color(Palette::TEXT_LO),
+        );
+
+        ui.add_space(14.0);
+        let dismiss_label = if self.cancel_flag.load(Ordering::SeqCst) {
+            "Will return to start when done"
+        } else {
+            "Return to start when done"
+        };
+        if self
+            .draw_button(
+                ui,
+                dismiss_label,
+                vec2(ui.available_width(), 38.0),
+                ButtonKind::Secondary,
+                !self.cancel_flag.load(Ordering::SeqCst),
+            )
+            .clicked()
+        {
+            self.cancel_flag.store(true, Ordering::SeqCst);
+            self.status = Some(
+                "This run will finish, then the app will return to the start screen.".to_owned(),
+            );
+        }
+    }
+
+    fn draw_result(&mut self, ui: &mut egui::Ui, ok: bool) {
+        ui.add_space(18.0);
+        ui.vertical_centered(|ui| {
+            let (icon_rect, _) = ui.allocate_exact_size(vec2(82.0, 82.0), Sense::hover());
+            let painter = ui.painter_at(icon_rect);
+            let fill = if ok {
+                Palette::success_muted()
+            } else {
+                Palette::error_muted()
+            };
+            let stroke = if ok { Palette::SUCCESS } else { Palette::ERROR };
+            painter.circle_filled(icon_rect.center(), 30.0, fill);
+            painter.circle_stroke(icon_rect.center(), 30.0, Stroke::new(2.0, stroke));
+
+            if ok {
+                self.check_anim = (self.check_anim + 0.07).min(1.0);
+                let a = Pos2::new(icon_rect.min.x + 18.0, icon_rect.min.y + 43.0);
+                let b = Pos2::new(icon_rect.min.x + 33.0, icon_rect.min.y + 57.0);
+                let c = Pos2::new(icon_rect.min.x + 61.0, icon_rect.min.y + 28.0);
+                painter.add(Shape::line(
+                    vec![a, b, c],
+                    Stroke::new(2.5, Palette::SUCCESS),
+                ));
+            } else {
+                painter.line_segment(
+                    [
+                        icon_rect.center() + vec2(-13.0, -13.0),
+                        icon_rect.center() + vec2(13.0, 13.0),
+                    ],
+                    Stroke::new(2.5, Palette::ERROR),
+                );
+                painter.line_segment(
+                    [
+                        icon_rect.center() + vec2(13.0, -13.0),
+                        icon_rect.center() + vec2(-13.0, 13.0),
+                    ],
+                    Stroke::new(2.5, Palette::ERROR),
+                );
+            }
+        });
+
+        ui.vertical_centered(|ui| {
+            if let Some(dest) = &self.dest_path {
+                let file_name = dest.file_name().unwrap_or_default().to_string_lossy();
+                ui.label(
+                    egui::RichText::new(truncate_chars(&file_name, 44))
+                        .font(FontId::new(12.0, FontFamily::Monospace))
+                        .color(Palette::TEXT_MED),
+                );
+                ui.add_space(14.0);
+            }
+
+            if ok {
+                let button_width = (ui.available_width() - 8.0) * 0.5;
+                ui.horizontal(|ui| {
+                    if self
+                        .draw_button(
+                            ui,
+                            "Open folder",
+                            vec2(button_width, 40.0),
+                            ButtonKind::Secondary,
+                            true,
+                        )
+                        .clicked()
+                    {
+                        if let Some(dest) = &self.dest_path {
+                            if let Some(parent) = dest.parent() {
+                                let _ = open::that(parent);
+                            }
+                        }
+                    }
+
+                    if self
+                        .draw_button(
+                            ui,
+                            "New file",
+                            vec2(button_width, 40.0),
+                            ButtonKind::Primary,
+                            true,
+                        )
+                        .clicked()
+                    {
+                        self.secure_wipe_session();
+                    }
+                });
+            } else {
+                if let Some(message) = &self.status {
+                    self.draw_notice(
+                        ui,
+                        "Error details",
+                        &truncate_chars(message, 120),
+                        Palette::error_muted(),
+                        Palette::ERROR,
+                        Palette::ERROR,
+                    );
+                    ui.add_space(14.0);
+                }
+
+                if self
+                    .draw_button(
+                        ui,
+                        "Back to start",
+                        vec2(ui.available_width(), 40.0),
+                        ButtonKind::Primary,
+                        true,
+                    )
+                    .clicked()
+                {
+                    self.secure_wipe_session();
+                }
+            }
         });
     }
-    fn draw_processing(&mut self, ui: &mut egui::Ui) { let chars=["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]; ui.add_space(20.0); ui.vertical_centered(|ui| { ui.label(egui::RichText::new(chars[self.spinner_index]).font(FontId::new(32.0,FontFamily::Monospace)).color(Palette::ACCENT)); ui.add_space(12.0); ui.label(egui::RichText::new(if self.mode==Mode::Encrypt{"Encrypting…"}else{"Decrypting…"}).font(FontId::new(14.0,FontFamily::Monospace)).color(Palette::TEXT_HI)); ui.add_space(8.0); ui.label(egui::RichText::new(truncate_chars(self.status.as_deref().unwrap_or("Processing..."),50)).font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::TEXT_LO)); ui.add_space(14.0); let (r,_) = ui.allocate_exact_size(vec2(452.0,6.0),Sense::hover()); let p=ui.painter_at(r); p.rect_filled(r,3.0,Palette::SURFACE_HI); p.rect_filled(Rect::from_min_max(r.min,Pos2::new(r.min.x+r.width()*self.prog_frac,r.max.y)),3.0,Palette::ACCENT); p.text(Pos2::new(r.max.x+6.0,r.center().y),Align2::LEFT_CENTER,format!("{}%",(self.prog_frac*100.0) as u32),FontId::new(11.0,FontFamily::Monospace),Palette::TEXT_MED); ui.add_space(8.0); ui.label(egui::RichText::new(&self.scramble_text).font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::TEXT_LO)); ui.add_space(12.0); if ui.add(egui::Label::new(egui::RichText::new("Cancel").font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::TEXT_LO)).sense(Sense::click())).clicked() { self.cancel_flag.store(true, Ordering::SeqCst); self.status=Some("Cancelled.".to_owned()); self.flow=AppFlow::FileDrop; } }); }
-    fn draw_result(&mut self, ui: &mut egui::Ui, ok: bool) { ui.add_space(20.0); let (r,_) = ui.allocate_exact_size(vec2(80.0,80.0), Sense::hover()); let p=ui.painter_at(r); p.circle_stroke(r.center(),28.0,Stroke::new(2.0,if ok{Palette::SUCCESS}else{Palette::ERROR})); if ok { self.check_anim=(self.check_anim+0.07).min(1.0); let a=Pos2::new(r.min.x+80.0*0.22,r.min.y+80.0*0.52); let b=Pos2::new(r.min.x+80.0*0.42,r.min.y+80.0*0.72); let c=Pos2::new(r.min.x+80.0*0.78,r.min.y+80.0*0.32); p.add(Shape::line(vec![a,b,c],Stroke::new(2.0,Palette::SUCCESS))); } else { p.line_segment([r.center()+vec2(-14.0,-14.0),r.center()+vec2(14.0,14.0)],Stroke::new(2.0,Palette::ERROR)); p.line_segment([r.center()+vec2(14.0,-14.0),r.center()+vec2(-14.0,14.0)],Stroke::new(2.0,Palette::ERROR)); }
-        ui.vertical_centered(|ui| { ui.label(egui::RichText::new(if ok{"Done"}else{"Failed"}).font(FontId::new(18.0,FontFamily::Monospace)).color(if ok{Palette::TEXT_HI}else{Palette::ERROR})); if let Some(d)=&self.dest_path { let n = d.file_name().unwrap_or_default().to_string_lossy(); ui.label(egui::RichText::new(truncate_chars(&n,40)).font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::TEXT_MED)); } ui.add_space(16.0); if ok { ui.horizontal(|ui| { let (a,ra)=ui.allocate_exact_size(vec2(220.0,38.0),Sense::click()); ui.painter_at(a).rect_filled(a,6.0,Palette::SURFACE_HI); ui.painter_at(a).rect_stroke(a,6.0,Stroke::new(1.0,Palette::BORDER),StrokeKind::Outside); ui.painter_at(a).text(a.center(),Align2::CENTER_CENTER,"Open folder",FontId::new(12.0,FontFamily::Monospace),Palette::TEXT_MED); if ra.clicked() { if let Some(p)=&self.dest_path { if let Some(parent)=p.parent() { let _=open::that(parent); } } }
-                let (b,rb)=ui.allocate_exact_size(vec2(220.0,38.0),Sense::click()); ui.painter_at(b).rect_filled(b,6.0,Palette::ACCENT); ui.painter_at(b).text(b.center(),Align2::CENTER_CENTER,"New file",FontId::new(12.0,FontFamily::Monospace),Palette::TEXT_HI); if rb.clicked() { self.secure_wipe_session(); } }); } else { let msg=truncate_chars(self.status.as_deref().unwrap_or("Unknown error"),120); ui.label(egui::RichText::new(msg).font(FontId::new(11.0,FontFamily::Monospace)).color(Palette::ERROR)); let (b,rb)=ui.allocate_exact_size(vec2(452.0,38.0),Sense::click()); ui.painter_at(b).rect_filled(b,6.0,Palette::ACCENT); ui.painter_at(b).text(b.center(),Align2::CENTER_CENTER,"Try again",FontId::new(12.0,FontFamily::Monospace),Palette::TEXT_HI); if rb.clicked() { self.secure_wipe_session(); } } }); }
+}
+
+impl eframe::App for NeuronEncryptApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
+        if let Some(path) = dropped_files.first().and_then(|file| file.path.clone()) {
+            self.set_selected_file(path);
+        }
+
+        loop {
+            let msg = self.crypto_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+            let Some(msg) = msg else {
+                break;
+            };
+
+            match msg {
+                GuiMsg::Progress(progress, text) => {
+                    self.progress = progress;
+                    self.status = Some(truncate_chars(&sanitize_text(&text), 72));
+                }
+                GuiMsg::Done(message) => {
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        self.secure_wipe_session();
+                    } else {
+                        self.status = Some(sanitize_text(&message));
+                        self.flow = AppFlow::Success;
+                        self.check_anim = 0.0;
+                    }
+                    self.crypto_rx = None;
+                }
+                GuiMsg::Error(error) => {
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        self.secure_wipe_session();
+                    } else {
+                        self.status = Some(sanitize_text(&error.to_string()));
+                        self.flow = AppFlow::Failure;
+                    }
+                    self.crypto_rx = None;
+                }
+            }
+        }
+
+        let (_, target_strength, strength_label) = eval_strength(&self.password);
+        self.strength_frac += (target_strength - self.strength_frac) * 0.18;
+        if (target_strength - self.strength_frac).abs() > 0.003 {
+            ctx.request_repaint_after(Duration::from_millis(32));
+        }
+
+        if self.flow == AppFlow::Processing {
+            if Instant::now().duration_since(self.last_spinner_tick) >= Duration::from_millis(80) {
+                self.last_spinner_tick = Instant::now();
+                self.spinner_index = (self.spinner_index + 1) % 4;
+
+                let mut rng = OsRng;
+                let random_hex: String = (0..32)
+                    .map(|_| std::char::from_digit(rng.next_u32() % 16, 16).unwrap_or('0'))
+                    .collect();
+                self.scramble_text = format!("0x{}...{}", &random_hex[..12], &random_hex[20..]);
+            }
+
+            self.prog_frac += (self.progress - self.prog_frac) * 0.15;
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().fill(Palette::BG))
+            .show(ctx, |ui| {
+                self.draw_title_bar(ui);
+                ui.add_space(22.0);
+
+                ui.vertical_centered(|ui| {
+                    egui::Frame::none()
+                        .fill(Palette::SURFACE)
+                        .stroke(Stroke::new(1.0, Palette::BORDER))
+                        .rounding(12.0)
+                        .inner_margin(24.0)
+                        .show(ui, |ui| {
+                            ui.set_width(520.0);
+                            self.draw_screen_header(ui);
+                            ui.add_space(22.0);
+
+                            match self.flow {
+                                AppFlow::FileDrop => self.draw_file_drop(ui),
+                                AppFlow::Configure => self.draw_configure(ui, ctx, strength_label),
+                                AppFlow::Processing => self.draw_processing(ui),
+                                AppFlow::Success => self.draw_result(ui, true),
+                                AppFlow::Failure => self.draw_result(ui, false),
+                            }
+                        });
+
+                    ui.add_space(16.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "AES-256-GCM-SIV | Argon2id | HKDF-SHA512 | v{}",
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_LO),
+                    );
+                });
+            });
+    }
 }
