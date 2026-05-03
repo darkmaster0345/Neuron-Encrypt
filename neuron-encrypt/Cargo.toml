@@ -15,6 +15,7 @@ name = "neuron-encrypt"
 path = "src/main.rs"
 
 [dependencies]
+open = "5"
 aes-gcm-siv = { version = "0.11", features = ["std"] }
 argon2      = { version = "0.5",  features = ["std"] }
 hkdf        = "0.12"
