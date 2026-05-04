@@ -116,6 +116,7 @@ pub struct NeuronEncryptApp {
     last_spinner_tick: Instant,
     scramble_text: String,
     reencrypt_confirmed: bool,
+    strength_frac: f32,
     prog_frac: f32,
     check_anim: f32,
     cancel_flag: Arc<AtomicBool>,
