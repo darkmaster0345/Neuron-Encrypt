@@ -7,9 +7,9 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)
 ![Rust](https://img.shields.io/badge/Rust-1.70+-orange?style=for-the-badge&logo=rust)
 
-**Military-Grade File Encryption**
-AES-256-GCM-SIV · Argon2id · HKDF-SHA512
-*Memory-Safe Rust Implementation*
+**Local file encryption. No accounts. No internet. No compromise.**
+
+AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · Memory-Safe Rust
 
 [![GitHub release](https://img.shields.io/github/v/release/darkmaster0345/Neuron-Encrypt?style=for-the-badge)](https://github.com/darkmaster0345/Neuron-Encrypt/releases)
 [![GitHub stars](https://img.shields.io/github/stars/darkmaster0345/Neuron-Encrypt?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/stargazers)
@@ -20,13 +20,9 @@ AES-256-GCM-SIV · Argon2id · HKDF-SHA512
 
 ## What Is Neuron Encrypt?
 
-Neuron Encrypt is a desktop file encryption application
-built entirely in Rust. It encrypts any file using
-AES-256-GCM-SIV — the same cipher approved by the NSA
-for TOP SECRET information — with a password you choose.
+Neuron Encrypt is a desktop file encryption tool built in Rust. Drop a file, enter a password, done. The encrypted output stays on your machine — nothing is sent anywhere.
 
-No accounts. No servers. No internet connection.
-Everything happens locally on your machine.
+Decryption works the same way: drop the `.vx2` file, enter the original password, get your file back.
 
 ---
 
@@ -70,18 +66,16 @@ Offset   Length   Content
 
 ## Security Audit Results
 
-The codebase passed two independent audits:
-
 | Audit | Score | Verdict |
 |---|---|---|
 | Checklist Audit | 28/28 PASS | READY |
 | Deep Security Audit | 7/7 PASS | READY |
 
 Known limitations (by design):
+
 - Password cannot be recovered — no backdoors exist
 - Encrypted file size reveals original size (± 68 bytes)
-- egui text buffer may hold transient password copies
-  during typing (inherent GUI framework limitation)
+- egui text buffer may hold transient password copies during typing (inherent GUI framework limitation)
 
 ---
 
@@ -97,7 +91,8 @@ Known limitations (by design):
 
 </div>
 
-Always verify your download:
+Verify your download:
+
 ```bash
 # Linux / macOS
 sha256sum NeuronEncrypt-Linux-x64
@@ -105,43 +100,8 @@ sha256sum NeuronEncrypt-Linux-x64
 # Windows (PowerShell)
 Get-FileHash NeuronEncrypt-Windows-x64.exe -Algorithm SHA256
 ```
-Compare the hash against the checksums listed on the
-releases page.
 
----
-
-## Build From Source
-
-### Requirements
-- Rust 1.70+ — install from https://rustup.rs
-- Git
-
-### Steps
-
-```bash
-# Clone
-git clone https://github.com/darkmaster0345/Neuron-Encrypt.git
-cd Neuron-Encrypt/neuron-encrypt
-
-# Build release binary
-cargo build --release
-
-# Binary location:
-# Windows : target\release\neuron-encrypt.exe
-# macOS   : target/release/neuron-encrypt
-# Linux   : target/release/neuron-encrypt
-```
-
-
-### Custom Icon
-Place icon.png (any size, RGBA) at neuron-encrypt/assets/icon.png and icon.ico
-(multi-size ICO, 16/32/48/256px) at neuron-encrypt/assets/icon.ico before building.
-The window icon is loaded at compile time. The installer icon requires the .ico file.
-
-### Windows Shortcut
-
-Double-click `build.bat` — it installs dependencies
-and builds the .exe automatically.
+Compare against the checksums listed on the releases page.
 
 ---
 
@@ -150,47 +110,61 @@ and builds the .exe automatically.
 ### Encrypting a File
 
 1. Open Neuron Encrypt
-2. Select **ENCRYPT MODE** (left pill button)
-3. Click **BROWSE** and select your file
-4. Enter a strong passphrase
-5. Click **ENCRYPT →**
-6. Encrypted file saved as `yourfile.ext.vx2`
-7. Your original file is untouched
+2. Drag your file onto the window, or click to browse
+3. Enter a strong password (use the strength meter as a guide)
+4. Click **ENCRYPT**
+5. Encrypted file saved as `yourfile.ext.vx2` — your original is untouched
 
 ### Decrypting a File
 
-1. Select **DECRYPT MODE** (right pill button)
-2. Click **BROWSE** and select the `.vx2` file
-3. Enter the same passphrase used to encrypt
-4. Click **DECRYPT →**
-5. Original file restored without `.vx2` extension
-
+1. Drag the `.vx2` file onto the window, or click to browse
+2. Enter the same password used to encrypt
+3. Click **DECRYPT**
+4. Original file restored in the same folder
 
 ### Reinstalling / Updating
-Run the installer again — it detects the existing installation automatically,
-terminates any running instance, and overwrites the binary in place.
-Your shortcuts and Start Menu entries are preserved. No uninstall step required.
 
-### Password Tips
+Run the installer again — it detects the existing installation, closes any running instance, and overwrites the binary. Your shortcuts are preserved. No uninstall step needed.
+
+### Password Strength Guide
 
 ```
-Minimum recommended : 12 characters
-Strong example      : correct-horse-battery-staple-7
-Use the strength meter in the app as a guide:
-  WEAK   → do not use
-  FAIR   → acceptable for low-sensitivity files
-  STRONG → recommended
-  ELITE  → maximum security
+WEAK   → do not use
+FAIR   → acceptable for low-sensitivity files
+STRONG → recommended
+ELITE  → maximum security
 ```
 
 ---
 
 ## ⚠️ Critical Warning
 
-**If you forget your password your file is permanently
-unrecoverable. There is no reset, no backdoor, and no
-way to help you. Write your password down and store it
-somewhere safe before encrypting important files.**
+**If you forget your password, your file is permanently unrecoverable. There is no reset, no backdoor, and no way to recover it. Write your password down and store it somewhere safe before encrypting important files.**
+
+---
+
+## Build From Source
+
+**Requirements:** Rust 1.70+ from [rustup.rs](https://rustup.rs) and Git.
+
+```bash
+git clone https://github.com/darkmaster0345/Neuron-Encrypt.git
+cd Neuron-Encrypt/neuron-encrypt
+cargo build --release
+```
+
+Binary locations:
+```
+Windows : target\release\neuron-encrypt.exe
+macOS   : target/release/neuron-encrypt
+Linux   : target/release/neuron-encrypt
+```
+
+Windows users can also double-click `build.bat` instead.
+
+### Icon Assets
+
+Place `icon.png` (any size, RGBA) at `assets/icon.png` and `icon.ico` (multi-size: 16/32/48/256px) at `assets/icon.ico` before building. The window icon loads at runtime; the installer icon requires the `.ico` file.
 
 ---
 
@@ -204,11 +178,13 @@ neuron-encrypt/
 │   ├── crypto.rs    — all encryption logic
 │   └── error.rs     — error types
 ├── assets/
+│   ├── icon.ico
+│   ├── icon.png
 │   └── fonts/
 │       └── JetBrainsMono-Regular.ttf
 ├── Cargo.toml
 ├── Cargo.lock
-└── build.bat        — Windows build script
+└── build.bat
 ```
 
 ---
@@ -230,33 +206,24 @@ neuron-encrypt/
 └─────────────────────────────────────┘
 ```
 
-The GUI thread never touches crypto operations.
-Crypto runs in a background thread and reports
-progress via mpsc channel.
+The GUI thread never touches crypto. All encryption runs in a background thread and reports progress via mpsc channel.
 
 ---
 
 ## Known Limitations
 
-- **No batch encryption** — one file at a time
-- **No CLI** — GUI only in this version
-- **2 GB file limit** — by design to prevent OOM
-- **No key files** — password only
-- **No compression** — encrypted files are
-  slightly larger than originals (+ 68 bytes)
+- One file at a time — no batch encryption
+- Password only — no key files
+- 2 GB file size limit (by design, prevents OOM)
+- Encrypted files are ~68 bytes larger than originals
 
 ---
 
 ## Contributing
 
-Bug reports and pull requests are welcome.
-
-For security vulnerabilities, open a private
-GitHub Security Advisory rather than a
-public issue.
+Bug reports and pull requests are welcome. For security vulnerabilities, open a private GitHub Security Advisory rather than a public issue.
 
 ```bash
-# Development setup
 rustup component add rustfmt clippy
 cargo fmt --check
 cargo clippy -- -D warnings
@@ -267,21 +234,18 @@ cargo test --all
 
 ## License
 
-GPLV3 License — Copyright (c) 2024–2026 Ubaid ur Rehman
-
-See LICENSE file for full text.
+GPLv3 — Copyright (c) 2024–2026 Ubaid ur Rehman. See LICENSE for full text.
 
 ---
 
 ## Acknowledgments
 
-- RustCrypto team — for aes-gcm-siv, argon2, hkdf crates
-- egui/eframe team — for the GUI framework
-- Rust community — for the tooling and ecosystem
+- RustCrypto team — aes-gcm-siv, argon2, hkdf crates
+- egui/eframe team — GUI framework
+- Rust community — tooling and ecosystem
 
 ---
 
 <div align="center">
-
-Made with ❤️ and Rust
-
+Made with Rust
+</div>
