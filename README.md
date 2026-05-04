@@ -32,6 +32,7 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 - **Constant ~66 MB RAM**: Argon2id key derivation uses 64 MB (fixed), and 1 MB chunk streaming adds ~2 MB. Peak stays at ~66 MB regardless of file size.
 - **High-Efficiency Batch Queue Processing**: Select multiple files, enter one passphrase, and the app processes them sequentially. If any file fails (disk full, permission denied), its temporary data is cleaned up and the queue moves to the next file — the app never crashes.
 - **VAULTX03 Streaming Engine**: AES-256-GCM-SIV with STREAM BE32 construction. Files are encrypted in 1 MB chunks with per-chunk authentication tags, keeping memory flat and guaranteeing integrity.
+- **I/O Governor for Large Files**: Prevents OS dirty page cache saturation during multi-gigabyte encryptions. Every ~100 MB the engine forces a disk flush and yields the thread, eliminating system-wide freezes.
 - **Automatic Legacy Detection**: Magic bytes at offset 0 determine format version. VAULTX02 files are routed to the legacy decryptor transparently.
 - **Windows Installer with .vx2 File Association**: NSIS-based setup installs to `Program Files`, creates Start Menu and Desktop shortcuts, and optionally associates `.vx2` files so double-clicking launches the app.
 
@@ -44,6 +45,7 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 - **Password strength meter** — visual feedback (Weak / Fair / Strong / Elite)
 - **Real-time progress bar** — per-file progress in batch mode with throttled UI updates
 - **Batch cancellation** — cancel button aborts remaining files gracefully
+- **I/O Governor** — periodic disk flush every 100 MB with thread yield. Prevents OS page cache saturation and system lag on multi-GB files.
 - **Atomic file writes** — writes to a `.tmp` file first, then renames on success. No partial files on crash.
 - **Secure memory handling** — keys wrapped in `Zeroizing<T>`, wiped from RAM on drop
 - **Original files untouched** — output is always written to a new file beside the source
@@ -67,6 +69,7 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 | Streaming I/O | **EncryptorBE32 / DecryptorBE32** | Constant ~66 MB RAM regardless of file size |
 | File Writes | **Atomic .tmp → rename** | No partial or corrupted files on crash |
 | Batch Error Handling | **Per-file isolation** | Failed files cleaned up; remaining queue continues |
+| I/O Governor | **sync_data + thread yield** | Flushes disk cache every ~100 MB; prevents OS dirty page freezes on large files |
 
 ### Cryptographic Parameters
 
