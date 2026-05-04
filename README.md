@@ -9,7 +9,7 @@
 
 **Local file encryption. No accounts. No internet. No compromise.**
 
-AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · Memory-Safe Rust
+AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · 100% Safe Rust
 
 [![GitHub release](https://img.shields.io/github/v/release/darkmaster0345/Neuron-Encrypt?style=for-the-badge)](https://github.com/darkmaster0345/Neuron-Encrypt/releases)
 [![GitHub stars](https://img.shields.io/github/stars/darkmaster0345/Neuron-Encrypt?style=for-the-badge&logo=github)](https://github.com/darkmaster0345/Neuron-Encrypt/stargazers)
@@ -20,34 +20,55 @@ AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · Memory-Safe Rust
 
 ## What Is Neuron Encrypt?
 
-Neuron Encrypt is a desktop file encryption tool built in Rust. Drop a file, enter a password, done. The encrypted output stays on your machine — nothing is sent anywhere.
+Neuron Encrypt is a lightweight desktop file encryption tool built in Rust with a minimal dark-themed GUI. Drag a file in, enter a passphrase, and get an encrypted `.vx2` output. Your original file is never modified. Nothing leaves your machine.
 
-Decryption works the same way: drop the `.vx2` file, enter the original password, get your file back.
-
----
-
-## What's New in 2.0 (Streaming Update)
-- **No File Size Limit**: Encrypt files of any size (terabytes, exabytes). The 2 GB limit has been permanently removed!
-- **Memory Efficient**: The app now runs on a constant ~66 MB of RAM, even if you encrypt a 100 GB file, making it incredibly responsive on older or low-RAM hardware.
-- **Batch Processing**: Encrypt and decrypt multiple files simultaneously from the new batch upload menu.
-- **New VAULTX03 Engine**: Streaming encryption (STREAM BE32 construction) ensures cryptographic integrity while keeping memory usage flat.
-- **Flawless Backward Compatibility**: Neuron Encrypt 2.0 seamlessly reads and decrypts your old VAULTX02 files without any manual conversions.
+Decrypting works the same way: drop the `.vx2` file, enter the original passphrase, and get your file back. Neuron Encrypt 2.0 automatically detects whether a file uses the legacy VAULTX02 format or the current VAULTX03 streaming format — no manual switching required.
 
 ---
 
-## Security Architecture
+## What's New in 2.0
 
-| Component | Choice | Why |
+- **Zero File Size Limit**: Encrypt files of any size. The streaming engine removed the old 2 GB cap — terabyte-scale files work fine.
+- **Constant ~66 MB RAM**: Argon2id key derivation uses 64 MB (fixed), and 1 MB chunk streaming adds ~2 MB. Peak stays at ~66 MB regardless of file size.
+- **High-Efficiency Batch Queue Processing**: Select multiple files, enter one passphrase, and the app processes them sequentially. If any file fails (disk full, permission denied), its temporary data is cleaned up and the queue moves to the next file — the app never crashes.
+- **VAULTX03 Streaming Engine**: AES-256-GCM-SIV with STREAM BE32 construction. Files are encrypted in 1 MB chunks with per-chunk authentication tags, keeping memory flat and guaranteeing integrity.
+- **Automatic Legacy Detection**: Magic bytes at offset 0 determine format version. VAULTX02 files are routed to the legacy decryptor transparently.
+- **Windows Installer with .vx2 File Association**: NSIS-based setup installs to `Program Files`, creates Start Menu and Desktop shortcuts, and optionally associates `.vx2` files so double-clicking launches the app.
+
+---
+
+## Features
+
+- **Single-file encrypt/decrypt** — drag-and-drop or file browser
+- **Batch processing** — queue multiple files with a single passphrase
+- **Password strength meter** — visual feedback (Weak / Fair / Strong / Elite)
+- **Real-time progress bar** — per-file progress in batch mode with throttled UI updates
+- **Batch cancellation** — cancel button aborts remaining files gracefully
+- **Atomic file writes** — writes to a `.tmp` file first, then renames on success. No partial files on crash.
+- **Secure memory handling** — keys wrapped in `Zeroizing<T>`, wiped from RAM on drop
+- **Original files untouched** — output is always written to a new file beside the source
+- **Cross-platform** — Windows (x64 MSVC), macOS (Universal Intel + Apple Silicon), Linux (x64)
+- **No dependencies on runtime** — Windows builds use static CRT (`crt-static`). Just the binary.
+
+---
+
+## Technical Specifications
+
+### Security Stack
+
+| Component | Implementation | Detail |
 |---|---|---|
-| Cipher | AES-256-GCM-SIV (RFC 8452) | Nonce-misuse resistant authenticated encryption |
-| Key Derivation | Argon2id | Memory-hard, GPU/ASIC resistant |
-| Key Expansion | HKDF-SHA512 | Cryptographic domain separation |
-| Randomness | OS CSPRNG (OsRng) | Cryptographically secure |
-| Memory Safety | Zeroizing\<T\> | Keys zeroed from RAM on drop |
-| Streaming I/O | STREAM (EncryptorBE32) | Constant ~66 MB RAM regardless of file size |
-| File Writes | Atomic .tmp → rename | No partial files on crash |
+| Language | **100% Safe Rust** | Zero `unsafe` blocks in the codebase — memory safety guaranteed by the borrow checker |
+| Cipher | **AES-256-GCM-SIV** (RFC 8452) | Nonce-misuse resistant authenticated encryption |
+| Key Derivation | **Argon2id** | Memory-hard KDF: 64 MiB, 3 iterations, 4 lanes, 32-byte output — GPU/ASIC resistant |
+| Key Expansion | **HKDF-SHA512** | Cryptographic domain separation between V2 and V3 pipelines |
+| Randomness | **OsRng** (OS CSPRNG) | Fresh 16-byte salt + 7-byte stream nonce generated per file |
+| Memory Hygiene | **Zeroizing\<T\>** | Key material zeroed from RAM on scope exit |
+| Streaming I/O | **EncryptorBE32 / DecryptorBE32** | Constant ~66 MB RAM regardless of file size |
+| File Writes | **Atomic .tmp → rename** | No partial or corrupted files on crash |
+| Batch Error Handling | **Per-file isolation** | Failed files cleaned up; remaining queue continues |
 
-### Security Parameters
+### Cryptographic Parameters
 
 ```
 Argon2id:
@@ -66,26 +87,42 @@ Streaming:
   Max File   : ~4 Exabytes (2^32 × 1 MB)
 ```
 
-### Encrypted File Format (.vx2)
+### VAULTX03 File Format
 
-**V3 — Current (streaming, constant memory)**
 ```
-Offset   Length   Content
-0        8        Magic: "VAULTX03"
-8        32       Argon2id salt
-40       7        STREAM nonce
-47       C+16     Encrypted chunk 0 + auth tag
-...      C+16     Encrypted chunk N-1 + auth tag
-last     ≤C+16    Encrypted final chunk + auth tag
+┌─────────────────────────────────────────────────────────────────┐
+│                        VAULTX03 HEADER (31 bytes)               │
+├──────────┬──────────┬──────────┬─────────────────────────────────┤
+│ Magic    │ Salt     │ Nonce    │ Encrypted Data (streaming)      │
+│ 8 bytes  │ 16 bytes │ 7 bytes  │ N × (1 MB chunk + 16B tag)      │
+└──────────┴──────────┴──────────┴─────────────────────────────────┘
 ```
 
-**V2 — Legacy (still supported for decryption)**
+- **Magic**: Literal `b"VAULTX03"` — identifies the streaming format version
+- **Salt**: 128-bit fresh `OsRng`-generated per file
+- **Nonce**: 56-bit fresh `OsRng`-generated per file; `EncryptorBE32` appends an internal 5-byte counter/flag (12 bytes total internally)
+- **Body**: Sequence of AES-256-GCM-SIV encrypted chunks. Intermediate chunks via `encrypt_next`, final chunk via `encrypt_last` to prevent truncation attacks.
+
+### Legacy VAULTX02 Format
+
 ```
-Offset   Length   Content
-0        8        Magic: "VAULTX02"
-8        32       Argon2id salt
-40       12       AES-GCM-SIV nonce
-52       N+16     Ciphertext + auth tag
+┌─────────────────────────────────────────────────────────────────┐
+│                        VAULTX02 HEADER (52 bytes)               │
+├──────────┬──────────┬──────────┬─────────────────────────────────┤
+│ Magic    │ Salt     │ Nonce    │ Ciphertext + Auth Tag           │
+│ 8 bytes  │ 32 bytes │ 12 bytes │ Entire file loaded into RAM     │
+└──────────┴──────────┴──────────┴─────────────────────────────────┘
+```
+
+VAULTX02 files are automatically detected by their magic bytes and routed to the legacy decryptor. Supported for decryption only.
+
+### Memory Profile
+
+```
+Key derivation (Argon2id) : ~64 MB  (fixed, 65,536 KiB blocks)
+Stream buffer (1 MB chunk): ~2 MB   (read + ciphertext buffer)
+───────────────────────────────────────────────────────────────
+Peak RAM                  : ~66 MB  (constant, independent of file size)
 ```
 
 ---
@@ -99,35 +136,9 @@ Offset   Length   Content
 
 Known limitations (by design):
 
-- Password cannot be recovered — no backdoors exist
-- Encrypted file size reveals original size (± 68 bytes)
+- Passphrase cannot be recovered — no backdoors exist
+- Encrypted file size reveals original file size (± 31-byte header + 16-byte tag per 1 MB chunk)
 - egui text buffer may hold transient password copies during typing (inherent GUI framework limitation)
-
----
-
-## Download
-
-<div align="center">
-
-| Platform | Download |
-|---|---|
-| Windows (x64) | [NeuronEncrypt-Windows-x64.exe](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-| macOS (Universal — Intel + Apple Silicon) | [NeuronEncrypt-macOS](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-| Linux (x64) | [NeuronEncrypt-Linux-x64](https://github.com/darkmaster0345/Neuron-Encrypt/releases) |
-
-</div>
-
-Verify your download:
-
-```bash
-# Linux / macOS
-sha256sum NeuronEncrypt-Linux-x64
-
-# Windows (PowerShell)
-Get-FileHash NeuronEncrypt-Windows-x64.exe -Algorithm SHA256
-```
-
-Compare against the checksums listed on the releases page.
 
 ---
 
@@ -136,29 +147,28 @@ Compare against the checksums listed on the releases page.
 ### Encrypting a File
 
 1. Open Neuron Encrypt
-2. Drag your file onto the window, or click to browse
-3. Enter a strong password (use the strength meter as a guide)
-4. Click **ENCRYPT**
-5. Encrypted file saved as `yourfile.ext.vx2` — your original is untouched
+2. Drag your file onto the window, or click **Browse file**
+3. Enter a passphrase (use the strength meter as a guide)
+4. Confirm the passphrase
+5. Click **ENCRYPT**
+6. Output saved as `yourfile.ext.vx2` beside the original — the source is untouched
 
 ### Decrypting a File
 
-1. Drag the `.vx2` file onto the window, or click to browse
-2. Enter the same password used to encrypt
+1. Drag a `.vx2` file onto the window, or click **Browse file**
+2. Enter the passphrase used during encryption
 3. Click **DECRYPT**
-4. Original file restored in the same folder
+4. Original file restored beside the encrypted copy
 
 ### Batch Processing
 
 1. Click **Batch upload** on the main screen
-2. Select multiple files in the file dialog
-3. Enter a single password for all files
-4. Click **Encrypt All Files** or **Decrypt All Files**
-5. Review the per-file results summary when complete
-
-### Reinstalling / Updating
-
-Run the installer again — it detects the existing installation, closes any running instance, and overwrites the binary. Your shortcuts are preserved. No uninstall step needed.
+2. Select multiple files in the dialog
+3. The app auto-detects mode: all `.vx2` → Decrypt, all others → Encrypt
+4. Enter one passphrase for all files
+5. Click **Encrypt All Files** or **Decrypt All Files**
+6. Review the per-file results summary (success/failure) when complete
+7. Failed files do not crash the batch — the queue continues
 
 ### Password Strength Guide
 
@@ -171,9 +181,25 @@ ELITE  → maximum security
 
 ---
 
-## ⚠️ Critical Warning
+## Windows Installer
 
-**If you forget your password, your file is permanently unrecoverable. There is no reset, no backdoor, and no way to recover it. Write your password down and store it somewhere safe before encrypting important files.**
+Neuron Encrypt ships with an NSIS-based installer for Windows. Download `NeuronEncrypt-Windows-x64-Setup.exe` from the releases page.
+
+**What the installer does:**
+
+- Installs to `C:\Program Files\NeuronEncrypt`
+- Creates Start Menu shortcuts (app + uninstaller)
+- Optional Desktop shortcut
+- Optional `.vx2` file association (double-click encrypted files to launch the app)
+- Registers itself in Windows Add/Remove Programs
+- On reinstall: detects existing install, kills any running instance, and overwrites the binary
+- Clean uninstall removes all installer-added files, shortcuts, and registry keys — your `.vx2` files are never deleted
+
+**Optional installer components** (selectable during setup):
+
+- **Core Application** — always installed (required)
+- **Desktop Shortcut** — optional
+- **Associate .vx2 files** — optional
 
 ---
 
@@ -196,26 +222,48 @@ Linux   : target/release/neuron-encrypt
 
 Windows users can also double-click `build.bat` instead.
 
+### Building the Windows Installer
+
+```powershell
+# 1. Build the release binary
+cd neuron-encrypt
+cargo build --release --target x86_64-pc-windows-msvc
+
+# 2. Install NSIS (if not already installed)
+choco install nsis --yes
+
+# 3. Build the installer from repo root
+cd ..
+makensis installer/neuron-encrypt.nsi
+```
+
+Output: `installer/NeuronEncrypt-Windows-x64-Setup.exe`
+
+### Building macOS Universal Binary
+
+```bash
+cd neuron-encrypt
+cargo build --release --target x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+lipo -create \
+  target/x86_64-apple-darwin/release/neuron-encrypt \
+  target/aarch64-apple-darwin/release/neuron-encrypt \
+  -output NeuronEncrypt-macOS
+```
+
 ---
 
-## Project Structure
+## CI/CD
 
-```
-neuron-encrypt/
-├── src/
-│   ├── main.rs      — entry point, window setup
-│   ├── gui.rs       — all UI code
-│   ├── crypto.rs    — all encryption logic
-│   └── error.rs     — error types
-├── assets/
-│   ├── icon.ico
-│   ├── icon.png
-│   └── fonts/
-│       └── JetBrainsMono-Regular.ttf
-├── Cargo.toml
-├── Cargo.lock
-└── build.bat
-```
+The repository uses GitHub Actions (`release.yml`) for automated builds on every push to `main`:
+
+1. **Security audit** — `cargo audit` with medium severity threshold
+2. **Linting** — `cargo fmt --check` + `cargo clippy -- -D warnings`
+3. **Tests** — `cargo test --all` with `RUST_BACKTRACE=1`
+4. **Builds** — parallel builds for Linux (x64), Windows (x64 MSVC), and macOS (Universal)
+5. **Windows installer** — NSIS packaging after the Windows build completes
+
+Artifacts are uploaded with 30-day retention.
 
 ---
 
@@ -223,35 +271,71 @@ neuron-encrypt/
 
 ```
 ┌─────────────────────────────────────┐
-│         GUI Layer (egui)            │
+│         GUI Layer (egui/eframe)     │
+│  Dark theme · JetBrains Mono font   │
+│  Drag-and-drop · Progress bars      │
 ├─────────────────────────────────────┤
 │       Application Controller        │
+│  State machine: drop → configure →  │
+│  processing → success/failure       │
 ├─────────────────────────────────────┤
 │     Background Crypto Thread        │
-│   std::thread + mpsc channel        │
+│   std::thread + crossbeam channel   │
 ├─────────────────────────────────────┤
 │        Core Crypto Library          │
-│  AES-GCM-SIV · Argon2id · HKDF     │
+│  AES-256-GCM-SIV · Argon2id · HKDF  │
 │  Zeroizing · OsRng · Atomic I/O     │
+│  VAULTX03 BE32 streaming engine     │
 └─────────────────────────────────────┘
 ```
 
-The GUI thread never touches crypto. All encryption runs in a background thread and reports progress via mpsc channel.
+The GUI thread never handles crypto. All encryption/decryption runs in a background thread and reports progress through a `crossbeam_channel`. The `ThrottledReporter` suppresses redundant UI updates, firing only on meaningful progress deltas or elapsed time thresholds.
+
+---
+
+## Project Structure
+
+```
+├── neuron-encrypt/
+│   ├── src/
+│   │   ├── main.rs      — entry point, window + theme setup
+│   │   ├── gui.rs       — full UI: screens, widgets, state machine
+│   │   ├── crypto.rs    — encryption, decryption, streaming, tests
+│   │   ├── error.rs     — CryptoError enum via thiserror
+│   │   └── lib.rs       — library crate root
+│   ├── assets/
+│   │   ├── icon.ico
+│   │   └── fonts/
+│   │       └── JetBrainsMono-Regular.ttf
+│   ├── .cargo/
+│   │   └── config.toml  — static CRT for Windows MSVC/GNU
+│   ├── Cargo.toml
+│   ├── Cargo.lock
+│   └── build.bat        — one-click Windows release build
+├── installer/
+│   ├── neuron-encrypt.nsi  — NSIS installer script
+│   └── README.md           — installer build instructions
+├── .github/workflows/
+│   └── release.yml         — CI/CD pipeline
+├── LICENSE              — GPLv3
+└── README.md            — this file
+```
 
 ---
 
 ## Known Limitations
 
-- Password only — no key files
-- Encrypted files are slightly larger than originals (~47-byte header + 16-byte auth tag per 1 MB chunk)
+- Passphrase-only authentication — no key file support
+- Encrypted files are slightly larger than originals (~31-byte header + 16-byte auth tag per 1 MB chunk)
 - Files encrypted with V3 (VAULTX03) cannot be decrypted by older versions of the app
+- Secure wipe uses 3-pass random overwrite + rename, which is not cryptographically guaranteed on SSDs, APFS, Btrfs, ZFS, or NTFS with shadow copies
 - egui text buffer may hold transient password copies during typing (inherent GUI framework limitation)
 
 ---
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For security vulnerabilities, open a private GitHub Security Advisory rather than a public issue.
+Bug reports and pull requests are welcome. For security vulnerabilities, open a private [GitHub Security Advisory](https://github.com/darkmaster0345/Neuron-Encrypt/security/advisories) rather than a public issue.
 
 ```bash
 rustup component add rustfmt clippy
@@ -271,7 +355,9 @@ GPLv3 — Copyright (c) 2024–2026 Ubaid ur Rehman. See LICENSE for full text.
 ## Acknowledgments
 
 - RustCrypto team — aes-gcm-siv, argon2, hkdf crates
-- egui/eframe team — GUI framework
+- egui/eframe team — immediate-mode GUI framework
+- JetBrains — JetBrains Mono font
+- NSIS community — Nullsoft Scriptable Install System
 - Rust community — tooling and ecosystem
 
 ---

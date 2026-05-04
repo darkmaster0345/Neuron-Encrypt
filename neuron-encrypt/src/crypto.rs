@@ -32,10 +32,28 @@ pub const TAG_LEN: usize = 16;
 pub const EXTENSION: &str = ".vx2";
 
 // ── V3 (streaming) constants ──
+/// VAULTX03 file header layout (31 bytes total):
+///
+/// | Offset | Length | Field          | Description                                    |
+/// |--------|--------|----------------|------------------------------------------------|
+/// | 0      | 8      | Magic Bytes    | Literal `b"VAULTX03"` identifies format version |
+/// | 8      | 16     | Salt           | Fresh `OsRng`-generated per file (128-bit entropy) |
+/// | 24     | 7      | Stream Nonce   | Fresh `OsRng`-generated per file; EncryptorBE32 appends an internal 5-byte counter/flag |
+///
+/// Body follows immediately after the header: a sequence of AES-256-GCM-SIV
+/// encrypted chunks via the BE32 streaming API. Each chunk carries a 16-byte
+/// authentication tag. The final chunk is sealed with `encrypt_last`/`decrypt_last`
+/// to prevent truncation attacks.
+///
+/// Memory profile: Argon2id (64 MB) during key derivation, then ~2 MB constant
+/// during 1 MB chunk streaming — peak ~66 MB regardless of file size.
 pub const MAGIC_V3: &[u8; 8] = b"VAULTX03";
+/// 16-byte salt — 128-bit entropy, recommended minimum for Argon2.
+pub const SALT_V3_LEN: usize = 16;
 /// EncryptorBE32 uses 5 bytes of the 12-byte nonce (4-byte counter + 1-byte flag).
 pub const STREAM_NONCE_LEN: usize = 7;
-pub const HEADER_V3_LEN: usize = 8 + SALT_LEN + STREAM_NONCE_LEN; // 47
+/// V3 header: 8 (magic) + 16 (salt) + 7 (stream_nonce) = 31 bytes.
+pub const HEADER_V3_LEN: usize = 8 + SALT_V3_LEN + STREAM_NONCE_LEN;
 /// 1 MB chunks — balances memory usage vs per-chunk overhead.
 pub const CHUNK_SIZE: usize = 1_048_576;
 
@@ -355,7 +373,7 @@ pub fn encrypt_file(
     let dest = validate_destination_path(src, dest)?;
     let source_len = source_metadata.len();
 
-    let mut salt = [0u8; SALT_LEN];
+    let mut salt = [0u8; SALT_V3_LEN];
     let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
     OsRng.fill_bytes(&mut stream_nonce);
@@ -580,7 +598,7 @@ fn decrypt_file_streaming(
 
     // Skip magic (already read by dispatcher), read salt + nonce
     file.seek(std::io::SeekFrom::Start(8))?;
-    let mut salt = [0u8; SALT_LEN];
+    let mut salt = [0u8; SALT_V3_LEN];
     let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
     file.read_exact(&mut salt)?;
     file.read_exact(&mut stream_nonce)?;
