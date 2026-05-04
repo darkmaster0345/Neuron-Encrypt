@@ -21,6 +21,7 @@ jobs:
       - name: Setup Rust (GNU)
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: x86_64-unknown-linux-gnu
           
       - name: Install cargo-audit
@@ -69,6 +70,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
 
       - name: Check Formatting
@@ -80,7 +82,10 @@ jobs:
         working-directory: neuron-encrypt
 
       - name: Run Tests
-        run: cargo test --all
+        run: |
+          cargo test --all
+        env:
+          RUST_BACKTRACE: 1
         working-directory: neuron-encrypt
 
       - name: Check Compilation
