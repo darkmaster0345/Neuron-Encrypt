@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "neuron-encrypt"
 path = "src/main.rs"
 
+[[bin]]
+name = "neuron-encrypt-cli"
+path = "src/bin/cli.rs"
+
 [dependencies]
 open = "5"
 aes-gcm-siv = { version = "0.11", features = ["std", "aes"] }
@@ -31,6 +35,7 @@ thiserror   = "1.0.61"
 chrono      = "0.4.38"
 crossbeam-channel = "0.5"
 hex = "0.4.3"
+clap = { version = "4", features = ["derive"] }
 
 [lints.clippy]
 explicit_auto_deref = "allow"
