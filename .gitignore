@@ -1,3 +1,6 @@
 /neuron-encrypt/target/
 /.github/*.md
 /build_log*.txt
+fix_*.py
+gui_part*.txt
+fix_*.txt
