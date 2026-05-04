@@ -41,9 +41,10 @@ fn main() -> eframe::Result<()> {
     let viewport = egui::ViewportBuilder::default()
         .with_title("Neuron Encrypt")
         .with_inner_size(egui::vec2(620.0, 540.0))
-        .with_resizable(false)
-        .with_maximize_button(false)
-        .with_decorations(false)
+        .with_resizable(true)
+        .with_maximize_button(true)
+        .with_minimize_button(true)
+        .with_decorations(true)
         .with_icon(load_icon());
 
     eframe::run_native(

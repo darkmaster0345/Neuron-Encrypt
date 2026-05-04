@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Neuron Encrypt](https://img.shields.io/badge/Neuron%20Encrypt-v1.0.0-blue?style=for-the-badge&logo=rust)
+![Neuron Encrypt](https://img.shields.io/badge/Neuron%20Encrypt-v2.0.0-blue?style=for-the-badge&logo=rust)
 ![License](https://img.shields.io/badge/License-GPLv3-green?style=for-the-badge)
 ![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge)
 ![Rust](https://img.shields.io/badge/Rust-1.70+-orange?style=for-the-badge&logo=rust)
@@ -23,6 +23,15 @@ AES-256-GCM-SIV · Argon2id · HKDF-SHA512 · Memory-Safe Rust
 Neuron Encrypt is a desktop file encryption tool built in Rust. Drop a file, enter a password, done. The encrypted output stays on your machine — nothing is sent anywhere.
 
 Decryption works the same way: drop the `.vx2` file, enter the original password, get your file back.
+
+---
+
+## What's New in 2.0 (Streaming Update)
+- **No File Size Limit**: Encrypt files of any size (terabytes, exabytes). The 2 GB limit has been permanently removed!
+- **Memory Efficient**: The app now runs on a constant ~66 MB of RAM, even if you encrypt a 100 GB file, making it incredibly responsive on older or low-RAM hardware.
+- **Batch Processing**: Encrypt and decrypt multiple files simultaneously from the new batch upload menu.
+- **New VAULTX03 Engine**: Streaming encryption (STREAM BE32 construction) ensures cryptographic integrity while keeping memory usage flat.
+- **Flawless Backward Compatibility**: Neuron Encrypt 2.0 seamlessly reads and decrypts your old VAULTX02 files without any manual conversions.
 
 ---
 
