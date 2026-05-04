@@ -16,15 +16,21 @@ impl Palette {
 }
 
 fn load_icon() -> eframe::egui::IconData {
-    // TODO: replace this blank icon with actual icon loading once icon.png is in assets/
+    let icon_data = include_bytes!("../../neuron-encrypt/assets/icon.png");
+    let image = image::load_from_memory(icon_data)
+        .expect("Failed to load icon")
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    let rgba = image.into_raw();
     eframe::egui::IconData {
-        rgba: vec![0; 4],
-        width: 1,
-        height: 1,
+        rgba,
+        width,
+        height,
     }
 }
 
 fn main() -> eframe::Result<()> {
+    std::env::set_var("RUST_BACKTRACE", "1");
     let viewport = egui::ViewportBuilder::default()
         .with_title("Neuron Encrypt")
         .with_inner_size(egui::vec2(620.0, 540.0))

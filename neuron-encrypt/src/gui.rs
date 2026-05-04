@@ -116,8 +116,6 @@ pub struct NeuronEncryptApp {
     last_spinner_tick: Instant,
     scramble_text: String,
     reencrypt_confirmed: bool,
-    stay_on_top: bool,
-    strength_frac: f32,
     prog_frac: f32,
     check_anim: f32,
     cancel_flag: Arc<AtomicBool>,
@@ -247,7 +245,6 @@ impl NeuronEncryptApp {
             last_spinner_tick: Instant::now(),
             scramble_text: String::from("0x0000...0000"),
             reencrypt_confirmed: false,
-            stay_on_top: false,
             strength_frac: 0.0,
             prog_frac: 0.0,
             check_anim: 0.0,
@@ -485,11 +482,7 @@ impl NeuronEncryptApp {
         }
 
         let mut x = rect.max.x - 12.0;
-        for (kind, label, width) in [
-            ("close", "X", 30.0),
-            ("min", "-", 30.0),
-            ("pin", if self.stay_on_top { "PINNED" } else { "PIN" }, 54.0),
-        ] {
+        for (kind, label, width) in [("close", "X", 30.0), ("min", "-", 30.0)] {
             let button_rect = Rect::from_min_max(
                 Pos2::new(x - width, rect.center().y - 12.0),
                 Pos2::new(x, rect.center().y + 12.0),
@@ -503,11 +496,6 @@ impl NeuronEncryptApp {
                 "min" if response.hovered() => {
                     (Palette::warning_muted(), Palette::WARNING, Palette::WARNING)
                 }
-                "pin" if self.stay_on_top || response.hovered() => (
-                    Palette::accent_muted(),
-                    Palette::ACCENT,
-                    Palette::TEXT_ACCENT,
-                ),
                 _ => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
             };
 
@@ -525,16 +513,7 @@ impl NeuronEncryptApp {
                 match kind {
                     "close" => ui.ctx().send_viewport_cmd(ViewportCommand::Close),
                     "min" => ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true)),
-                    _ => {
-                        self.stay_on_top = !self.stay_on_top;
-                        ui.ctx().send_viewport_cmd(ViewportCommand::WindowLevel(
-                            if self.stay_on_top {
-                                egui::WindowLevel::AlwaysOnTop
-                            } else {
-                                egui::WindowLevel::Normal
-                            },
-                        ));
-                    }
+                    _ => {}
                 }
             }
 
@@ -1141,6 +1120,20 @@ impl NeuronEncryptApp {
     fn draw_processing(&mut self, ui: &mut egui::Ui) {
         let spinner = ["|", "/", "-", "\\"];
         let percent = (self.prog_frac * 100.0).round() as u32;
+        let action_text = match self.mode {
+            Mode::Encrypt => "Encrypting...",
+            Mode::Decrypt => "Decrypting...",
+        };
+        let filename = self
+            .selected_file
+            .as_ref()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .unwrap_or_default();
 
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
@@ -1155,6 +1148,19 @@ impl NeuronEncryptApp {
                     .font(FontId::new(26.0, FontFamily::Monospace))
                     .color(Palette::TEXT_HI)
                     .strong(),
+            );
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new(action_text)
+                    .font(FontId::new(16.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_HI)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(truncate_chars(&filename, 40))
+                    .font(FontId::new(12.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_MED),
             );
         });
 
@@ -1194,6 +1200,7 @@ impl NeuronEncryptApp {
             });
 
         ui.add_space(14.0);
+        ui.add_space(14.0);
         ui.label(
             egui::RichText::new(
                 "This run cannot be force-cancelled from the GUI once it has started.",
@@ -1201,28 +1208,6 @@ impl NeuronEncryptApp {
             .font(FontId::new(10.5, FontFamily::Monospace))
             .color(Palette::TEXT_LO),
         );
-
-        ui.add_space(14.0);
-        let dismiss_label = if self.cancel_flag.load(Ordering::SeqCst) {
-            "Will return to start when done"
-        } else {
-            "Return to start when done"
-        };
-        if self
-            .draw_button(
-                ui,
-                dismiss_label,
-                vec2(ui.available_width(), 38.0),
-                ButtonKind::Secondary,
-                !self.cancel_flag.load(Ordering::SeqCst),
-            )
-            .clicked()
-        {
-            self.cancel_flag.store(true, Ordering::SeqCst);
-            self.status = Some(
-                "This run will finish, then the app will return to the start screen.".to_owned(),
-            );
-        }
     }
 
     fn draw_result(&mut self, ui: &mut egui::Ui, ok: bool) {
