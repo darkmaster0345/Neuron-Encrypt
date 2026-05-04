@@ -4,7 +4,7 @@ with open('neuron-encrypt/src/gui.rs', 'r') as f:
     content = f.read()
 
 # Issue 1: Window controls & Dragging
-content = content.replace('ViewportCommand::Minimized(true)', 'ViewportCommand::Minimize')
+# Remove this line. ViewportCommand::Minimized(true) is the correct egui API for minimizing viewports.
 # Replace close command just in case
 content = content.replace('ui.ctx().send_viewport_cmd(ViewportCommand::Close)', 'ui.ctx().send_viewport_cmd(ViewportCommand::Close)')
 
