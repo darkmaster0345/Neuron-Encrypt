@@ -16,7 +16,7 @@ impl Palette {
 }
 
 fn load_icon() -> eframe::egui::IconData {
-    let icon_data = include_bytes!("../assets/icon.png");
+    let icon_data = include_bytes!("../assets/icon.ico");
     let image = image::load_from_memory(icon_data)
         .expect("Failed to load icon")
         .into_rgba8();
