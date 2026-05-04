@@ -101,7 +101,6 @@ struct BatchResult {
 enum ButtonKind {
     Primary,
     Secondary,
-    Segment(bool),
 }
 
 struct MpscReporter {
@@ -363,15 +362,6 @@ impl NeuronEncryptApp {
     fn pick_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new().pick_file() {
             self.set_selected_file(path);
-        }
-    }
-
-    fn set_mode(&mut self, mode: Mode) {
-        if self.mode != mode {
-            self.mode = mode;
-            self.confirm_password = Zeroizing::new(String::new());
-            self.status = None;
-            self.reencrypt_confirmed = false;
         }
     }
 
@@ -803,13 +793,6 @@ impl NeuronEncryptApp {
                 (Palette::SURFACE_2, Palette::BORDER_MED, Palette::TEXT_HI)
             }
             ButtonKind::Secondary => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
-            ButtonKind::Segment(true) => {
-                (Palette::accent_muted(), Palette::ACCENT, Palette::TEXT_HI)
-            }
-            ButtonKind::Segment(false) if response.hovered() => {
-                (Palette::SURFACE_2, Palette::BORDER_MED, Palette::TEXT_HI)
-            }
-            ButtonKind::Segment(false) => (Palette::SURFACE_1, Palette::BORDER, Palette::TEXT_MED),
         };
 
         painter.rect_filled(rect, 8.0, fill);
@@ -1034,37 +1017,6 @@ impl NeuronEncryptApp {
                         .color(Palette::TEXT_MED),
                 );
             });
-    }
-
-    fn draw_mode_toggle(&mut self, ui: &mut egui::Ui) {
-        let button_width = (ui.available_width() - 8.0) * 0.5;
-        ui.horizontal(|ui| {
-            if self
-                .draw_button(
-                    ui,
-                    "Encrypt",
-                    vec2(button_width, 36.0),
-                    ButtonKind::Segment(self.mode == Mode::Encrypt),
-                    true,
-                )
-                .clicked()
-            {
-                self.set_mode(Mode::Encrypt);
-            }
-
-            if self
-                .draw_button(
-                    ui,
-                    "Decrypt",
-                    vec2(button_width, 36.0),
-                    ButtonKind::Segment(self.mode == Mode::Decrypt),
-                    true,
-                )
-                .clicked()
-            {
-                self.set_mode(Mode::Decrypt);
-            }
-        });
     }
 
     fn draw_password_row(&mut self, ui: &mut egui::Ui, label: &str, primary: bool) {
