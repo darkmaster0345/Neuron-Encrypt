@@ -12,8 +12,34 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Rust (GNU)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+          
+      - name: Install cargo-audit
+        run: cargo install cargo-audit
+        
+      - name: Configure cargo-audit severity
+        run: |
+          mkdir -p .cargo
+          echo '[advisories]' > .cargo/audit.toml
+          echo 'severity_threshold = "medium"' >> .cargo/audit.toml
+        working-directory: neuron-encrypt
+        
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: neuron-encrypt
+
   build:
     name: Build for ${{ matrix.os }}
+    needs: audit
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -44,6 +70,22 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
+
+      - name: Check Formatting
+        run: cargo fmt --check
+        working-directory: neuron-encrypt
+
+      - name: Run Clippy
+        run: cargo clippy -- -D warnings
+        working-directory: neuron-encrypt
+
+      - name: Run Tests
+        run: cargo test --all
+        working-directory: neuron-encrypt
+
+      - name: Check Compilation
+        run: cargo check
+        working-directory: neuron-encrypt
 
       - name: Build (Non-macOS)
         if: matrix.os != 'macos-latest'
