@@ -904,7 +904,7 @@ impl NeuronEncryptApp {
             self.pick_file();
         }
 
-        ui.add_space(16.0);
+        ui.add_space(18.0);
         ui.horizontal_centered(|ui| {
             self.draw_info_chip(
                 ui,
@@ -921,8 +921,7 @@ impl NeuronEncryptApp {
             );
         });
 
-        ui.add_space(20.0);
-        ui.add_space(20.0);
+        ui.add_space(16.0);
         let button_width = (ui.available_width() - 8.0) * 0.5;
         ui.horizontal_centered(|ui| {
             if self
@@ -1216,10 +1215,6 @@ impl NeuronEncryptApp {
             {
                 self.secure_wipe_session(ctx);
             }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.draw_mode_toggle(ui);
-            });
         });
 
         ui.add_space(16.0);
@@ -1307,35 +1302,35 @@ impl NeuronEncryptApp {
 
         let is_vx2 = self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p));
 
-        if self
-            .draw_button(
-                ui,
-                "ENCRYPT",
-                vec2(ui.available_width(), 44.0),
-                ButtonKind::Primary,
-                !disabled,
-            )
-            .clicked()
-            && !disabled
-        {
-            self.execute(ctx);
-        }
-
-        ui.add_space(8.0);
-
-        let decrypt_disabled = self.password.is_empty() || !is_vx2;
-        if self
-            .draw_button(
-                ui,
-                "DECRYPT",
-                vec2(ui.available_width(), 44.0),
-                ButtonKind::Secondary,
-                !decrypt_disabled,
-            )
-            .clicked()
-            && !decrypt_disabled
-        {
-            self.execute(ctx);
+        if is_vx2 {
+            let decrypt_disabled = self.password.is_empty();
+            if self
+                .draw_button(
+                    ui,
+                    "DECRYPT",
+                    vec2(ui.available_width(), 44.0),
+                    ButtonKind::Primary,
+                    !decrypt_disabled,
+                )
+                .clicked()
+                && !decrypt_disabled
+            {
+                self.execute(ctx);
+            }
+        } else {
+            if self
+                .draw_button(
+                    ui,
+                    "ENCRYPT",
+                    vec2(ui.available_width(), 44.0),
+                    ButtonKind::Primary,
+                    !disabled,
+                )
+                .clicked()
+                && !disabled
+            {
+                self.execute(ctx);
+            }
         }
     }
 
@@ -1574,10 +1569,6 @@ impl NeuronEncryptApp {
             {
                 self.secure_wipe_session(ctx);
             }
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.draw_mode_toggle(ui);
-            });
         });
 
         ui.add_space(16.0);
@@ -1636,14 +1627,16 @@ impl NeuronEncryptApp {
             ui.add_space(12.0);
         }
 
+        let button_label = if self.mode == Mode::Encrypt {
+            "Encrypt All Files"
+        } else {
+            "Decrypt All Files"
+        };
+
         if self
             .draw_button(
                 ui,
-                if self.mode == Mode::Encrypt {
-                    "Encrypt All Files"
-                } else {
-                    "Decrypt All Files"
-                },
+                button_label,
                 vec2(ui.available_width(), 44.0),
                 ButtonKind::Primary,
                 enabled,
