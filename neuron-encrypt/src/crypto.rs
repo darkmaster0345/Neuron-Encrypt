@@ -6,7 +6,7 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::time::SystemTime;
 
@@ -399,6 +399,8 @@ pub fn encrypt_file(
         // Stream encryption in 1 MB chunks
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut bytes_done: u64 = 0;
+        let mut chunk_counter: u64 = 0;
+        const IO_GOVENER_INTERVAL: u64 = 100; // ~100 MB between flushes
 
         loop {
             let n = read_exact_or_eof(&mut file, &mut buf)?;
@@ -437,6 +439,14 @@ pub fn encrypt_file(
                     .encrypt_next(&buf[..n])
                     .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
                 out.write_all(&ct)?;
+                chunk_counter += 1;
+
+                // I/O Governor: periodically flush dirty pages to prevent OS lag.
+                if chunk_counter % IO_GOVENER_INTERVAL == 0 {
+                    out.sync_data()?;
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+
                 // Put the peeked byte back by seeking back 1
                 file.seek(std::io::SeekFrom::Current(-1))?;
             }
