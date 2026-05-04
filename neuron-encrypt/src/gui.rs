@@ -164,11 +164,10 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
         byte_comparison_result |= byte_a ^ byte_b;
     }
 
-    // Constant-time check for length equality
     let len_diff = len_a ^ len_b;
     // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
     let len_mismatch_flag =
-        1 - (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
+        (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
 
     // Combine byte comparison result with length mismatch flag
     // If either bytes don't match OR lengths don't match, final_result will be non-zero
@@ -1881,38 +1880,40 @@ impl eframe::App for NeuronEncryptApp {
                 self.draw_title_bar(ui);
                 ui.add_space(22.0);
 
-                ui.vertical_centered(|ui| {
-                    egui::Frame::none()
-                        .fill(Palette::SURFACE)
-                        .stroke(Stroke::new(1.0, Palette::BORDER))
-                        .rounding(12.0)
-                        .inner_margin(24.0)
-                        .show(ui, |ui| {
-                            ui.set_width(520.0);
-                            self.draw_screen_header(ui);
-                            ui.add_space(22.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.vertical_centered(|ui| {
+                        egui::Frame::none()
+                            .fill(Palette::SURFACE)
+                            .stroke(Stroke::new(1.0, Palette::BORDER))
+                            .rounding(12.0)
+                            .inner_margin(24.0)
+                            .show(ui, |ui| {
+                                ui.set_width(520.0);
+                                self.draw_screen_header(ui);
+                                ui.add_space(22.0);
 
-                            match self.flow {
-                                AppFlow::FileDrop => self.draw_file_drop(ui),
-                                AppFlow::Configure => self.draw_configure(ui, ctx, strength_label),
-                                AppFlow::Processing => self.draw_processing(ui),
-                                AppFlow::Success => self.draw_result(ui, true),
-                                AppFlow::Failure => self.draw_result(ui, false),
-                                AppFlow::BatchConfigure => self.draw_batch_configure(ui, ctx, strength_label),
-                                AppFlow::BatchProcessing => self.draw_batch_processing(ui),
-                                AppFlow::BatchDone => self.draw_batch_result(ui),
-                            }
-                        });
+                                match self.flow {
+                                    AppFlow::FileDrop => self.draw_file_drop(ui),
+                                    AppFlow::Configure => self.draw_configure(ui, ctx, strength_label),
+                                    AppFlow::Processing => self.draw_processing(ui),
+                                    AppFlow::Success => self.draw_result(ui, true),
+                                    AppFlow::Failure => self.draw_result(ui, false),
+                                    AppFlow::BatchConfigure => self.draw_batch_configure(ui, ctx, strength_label),
+                                    AppFlow::BatchProcessing => self.draw_batch_processing(ui),
+                                    AppFlow::BatchDone => self.draw_batch_result(ui),
+                                }
+                            });
 
-                    ui.add_space(16.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "AES-256-GCM-SIV | Argon2id | HKDF-SHA512 | v{}",
-                            env!("CARGO_PKG_VERSION")
-                        ))
-                        .font(FontId::new(10.5, FontFamily::Monospace))
-                        .color(Palette::TEXT_LO),
-                    );
+                        ui.add_space(16.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "AES-256-GCM-SIV | Argon2id | HKDF-SHA512 | v{}",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                            .font(FontId::new(10.5, FontFamily::Monospace))
+                            .color(Palette::TEXT_LO),
+                        );
+                    });
                 });
             });
     }
