@@ -462,13 +462,23 @@ impl NeuronEncryptApp {
             return;
         }
 
-        let dst_name = preview_output_name(self.mode, &file_path);
-        let Some(dest) = rfd::FileDialog::new()
-            .set_directory(file_path.parent().unwrap_or(Path::new(".")))
-            .set_file_name(&dst_name)
-            .save_file()
-        else {
-            return;
+        // Decrypt: save automatically beside source. Encrypt: ask user where.
+        let dest = if self.mode == Mode::Decrypt {
+            let dst_name = preview_output_name(self.mode, &file_path);
+            match file_path.parent() {
+                Some(parent) => parent.join(&dst_name),
+                None => PathBuf::from(&dst_name),
+            }
+        } else {
+            let dst_name = preview_output_name(self.mode, &file_path);
+            let Some(dest) = rfd::FileDialog::new()
+                .set_directory(file_path.parent().unwrap_or(Path::new(".")))
+                .set_file_name(&dst_name)
+                .save_file()
+            else {
+                return;
+            };
+            dest
         };
 
         self.dest_path = Some(dest.clone());
@@ -808,22 +818,6 @@ impl NeuronEncryptApp {
         response
     }
 
-    fn draw_info_chip(&self, ui: &mut egui::Ui, label: &str, fill: Color32, text_color: Color32) {
-        let rounding = 11.0;
-        egui::Frame::none()
-            .fill(fill)
-            .stroke(Stroke::new(1.0, Palette::BORDER))
-            .rounding(rounding)
-            .inner_margin(6.0)
-            .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(label)
-                        .font(FontId::new(10.0, FontFamily::Monospace))
-                        .color(text_color),
-                );
-            });
-    }
-
     fn draw_file_drop(&mut self, ui: &mut egui::Ui) {
         ui.add_space(20.0);
 
@@ -886,23 +880,6 @@ impl NeuronEncryptApp {
         if response.clicked() {
             self.pick_file();
         }
-
-        ui.add_space(18.0);
-        ui.horizontal_centered(|ui| {
-            self.draw_info_chip(
-                ui,
-                "LOCAL ONLY",
-                Palette::accent_muted(),
-                Palette::TEXT_ACCENT,
-            );
-            ui.add_space(8.0);
-            self.draw_info_chip(
-                ui,
-                "ORIGINAL FILE UNTOUCHED",
-                Palette::SURFACE_1,
-                Palette::TEXT_MED,
-            );
-        });
 
         ui.add_space(16.0);
         let button_width = (ui.available_width() - 8.0) * 0.5;
