@@ -162,10 +162,6 @@ Linux   : target/release/neuron-encrypt
 
 Windows users can also double-click `build.bat` instead.
 
-### Icon Assets
-
-Place `icon.png` (any size, RGBA) at `assets/icon.png` and `icon.ico` (multi-size: 16/32/48/256px) at `assets/icon.ico` before building. The window icon loads at runtime; the installer icon requires the `.ico` file.
-
 ---
 
 ## Project Structure
