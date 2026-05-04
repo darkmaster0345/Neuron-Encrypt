@@ -97,6 +97,14 @@ jobs:
       - name: Install NSIS
         run: choco install nsis --yes --no-progress
 
+
+      - name: Verify assets/icon.ico exists
+        shell: bash
+        run: |
+          if [ ! -f neuron-encrypt/assets/icon.ico ]; then
+            echo "Error: assets/icon.ico is missing. The installer requires this icon."
+            false
+          fi
       - name: Build installer
         run: |
           & "C:\Program Files (x86)\NSIS\makensis.exe" installer/neuron-encrypt.nsi

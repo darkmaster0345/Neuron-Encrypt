@@ -25,23 +25,13 @@ fn load_icon() -> eframe::egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
-    let mut viewport = egui::ViewportBuilder::default()
+    let viewport = egui::ViewportBuilder::default()
         .with_title("Neuron Encrypt")
         .with_inner_size(egui::vec2(620.0, 540.0))
         .with_resizable(false)
-        .with_maximize_button(false);
-    #[cfg(not(target_os = "macos"))]
-    {
-        viewport = viewport.with_decorations(false);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        viewport = viewport
-            .with_decorations(true)
-            .with_titlebar_shown(true)
-            .with_titlebar_buttons_shown(true);
-    }
-    viewport = viewport.with_icon(load_icon());
+        .with_maximize_button(false)
+        .with_decorations(false)
+        .with_icon(load_icon());
 
     eframe::run_native(
         "Neuron Encrypt",

@@ -1,0 +1,500 @@
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::time::{Duration, Instant};
+
+use crossbeam_channel as mpsc;
+use eframe::egui::{
+    self, vec2, Align2, Color32, FontFamily, FontId, Pos2, Rect, Sense, Shape, Stroke,
+    ViewportCommand,
+};
+use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
+use neuron_encrypt_core::error::CryptoError;
+use rand_core::{OsRng, RngCore};
+use zeroize::Zeroizing;
+
+struct Palette;
+impl Palette {
+    const BG: Color32 = Color32::from_rgb(0x08, 0x08, 0x08);
+    const SURFACE: Color32 = Color32::from_rgb(0x10, 0x10, 0x10);
+    const SURFACE_HI: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    const BORDER: Color32 = Color32::from_rgb(0x28, 0x28, 0x28);
+    const BORDER_FOCUS: Color32 = Color32::from_rgb(0x63, 0x66, 0xF1);
+    const ACCENT: Color32 = Color32::from_rgb(0x63, 0x66, 0xF1);
+    fn accent_dim() -> Color32 {
+        Color32::from_rgba_unmultiplied(99, 102, 241, 18)
+    }
+    const TEXT_HI: Color32 = Color32::from_rgb(0xF5, 0xF5, 0xF5);
+    const TEXT_MED: Color32 = Color32::from_rgb(0x9A, 0x9A, 0x9A);
+    const TEXT_LO: Color32 = Color32::from_rgb(0x4A, 0x4A, 0x4A);
+    const SUCCESS: Color32 = Color32::from_rgb(0x10, 0xB9, 0x81);
+    const ERROR: Color32 = Color32::from_rgb(0xF4, 0x3F, 0x5E);
+    const WARNING: Color32 = Color32::from_rgb(0xF5, 0x9E, 0x0B);
+
+    const SURFACE_1: Color32 = Color32::from_rgb(0x16, 0x16, 0x16);
+    const SURFACE_2: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x1E);
+    const BORDER_SUBTLE: Color32 = Color32::from_rgb(0x1A, 0x1A, 0x1A);
+    const BORDER_MED: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2A);
+    const ACCENT_HOVER: Color32 = Color32::from_rgb(0x81, 0x8C, 0xF8);
+    fn accent_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(99, 102, 241, 30)
+    }
+    fn success_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(16, 185, 129, 30)
+    }
+    fn error_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(244, 63, 94, 30)
+    }
+    fn warning_muted() -> Color32 {
+        Color32::from_rgba_unmultiplied(245, 158, 11, 30)
+    }
+    const TEXT_ACCENT: Color32 = Color32::from_rgb(0x81, 0x8C, 0xF8);
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum AppFlow {
+    FileDrop,
+    Configure,
+    Processing,
+    Success,
+    Failure,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Mode {
+    Encrypt,
+    Decrypt,
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Strength {
+    None,
+    Weak,
+    Fair,
+    Strong,
+    Elite,
+}
+
+enum GuiMsg {
+    Progress(f32, String),
+    Done(String),
+    Error(CryptoError),
+}
+
+enum ButtonKind {
+    Primary,
+    Secondary,
+    Segment(bool),
+}
+
+struct MpscReporter {
+    tx: mpsc::Sender<GuiMsg>,
+}
+
+impl ProgressReporter for MpscReporter {
+    fn report(&self, progress: f32, message: &str) {
+        let _ = self
+            .tx
+            .try_send(GuiMsg::Progress(progress, message.to_owned()));
+    }
+}
+
+pub struct NeuronEncryptApp {
+    mode: Mode,
+    flow: AppFlow,
+    selected_file: Option<PathBuf>,
+    dest_path: Option<PathBuf>,
+    password: Zeroizing<String>,
+    confirm_password: Zeroizing<String>,
+    show_password: bool,
+    crypto_rx: Option<mpsc::Receiver<GuiMsg>>,
+    progress: f32,
+    status: Option<String>,
+    spinner_index: usize,
+    last_spinner_tick: Instant,
+    scramble_text: String,
+    reencrypt_confirmed: bool,
+    stay_on_top: bool,
+    strength_frac: f32,
+    prog_frac: f32,
+    check_anim: f32,
+    cancel_flag: Arc<AtomicBool>,
+}
+
+fn is_vx2_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.eq_ignore_ascii_case("vx2"))
+        .unwrap_or(false)
+}
+
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (ab, bb) = (a.as_bytes(), b.as_bytes());
+    if ab.len() != bb.len() {
+        return false;
+    }
+
+    let mut result = 0;
+    for (x, y) in ab.iter().zip(bb.iter()) {
+        result |= x ^ y;
+    }
+    result == 0
+}
+
+fn truncate_chars(s: &str, n: usize) -> String {
+    let mut out = s.chars().take(n).collect::<String>();
+    if s.chars().count() > n {
+        out.push_str("...");
+    }
+    out
+}
+
+fn sanitize_text(s: &str) -> String {
+    s.trim().to_owned()
+}
+
+fn format_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
+    } else {
+        format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+    }
+}
+
+fn strength_color(strength: Strength) -> Color32 {
+    match strength {
+        Strength::None => Palette::BORDER,
+        Strength::Weak => Palette::ERROR,
+        Strength::Fair => Palette::WARNING,
+        Strength::Strong => Palette::ACCENT,
+        Strength::Elite => Palette::SUCCESS,
+    }
+}
+
+fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
+    if password.is_empty() {
+        return (Strength::None, 0.0, "None");
+    }
+
+    let mut score: f32 = 0.0;
+    let len = password.chars().count();
+
+    if len >= 8 {
+        score += 1.0;
+    }
+    if len >= 12 {
+        score += 1.0;
+    }
+    if len >= 16 {
+        score += 1.0;
+    }
+    if password.chars().any(|c| c.is_ascii_uppercase()) {
+        score += 1.0;
+    }
+    if password.chars().any(|c| c.is_ascii_digit()) {
+        score += 1.0;
+    }
+    if password.chars().any(|c| !c.is_alphanumeric()) {
+        score += 1.0;
+    }
+
+    score = score.clamp(0.0, 6.0);
+    if score < 2.0 {
+        (Strength::Weak, score / 6.0, "Weak")
+    } else if score < 3.5 {
+        (Strength::Fair, score / 6.0, "Fair")
+    } else if score < 5.0 {
+        (Strength::Strong, score / 6.0, "Strong")
+    } else {
+        (Strength::Elite, score / 6.0, "Elite")
+    }
+}
+
+fn preview_output_name(mode: Mode, path: &Path) -> String {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    match mode {
+        Mode::Encrypt => format!("{}{}", name, crypto::EXTENSION),
+        Mode::Decrypt => {
+            if name.to_lowercase().ends_with(crypto::EXTENSION) {
+                name[..name.len() - crypto::EXTENSION.len()].to_owned()
+            } else {
+                name.to_string()
+            }
+        }
+    }
+}
+
+impl NeuronEncryptApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self {
+            mode: Mode::Encrypt,
+            flow: AppFlow::FileDrop,
+            selected_file: None,
+            dest_path: None,
+            password: Zeroizing::new(String::new()),
+            confirm_password: Zeroizing::new(String::new()),
+            show_password: false,
+            crypto_rx: None,
+            progress: 0.0,
+            status: None,
+            spinner_index: 0,
+            last_spinner_tick: Instant::now(),
+            scramble_text: String::from("0x0000...0000"),
+            reencrypt_confirmed: false,
+            stay_on_top: false,
+            strength_frac: 0.0,
+            prog_frac: 0.0,
+            check_anim: 0.0,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn secure_wipe_session(&mut self) {
+        self.mode = Mode::Encrypt;
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.selected_file = None;
+        self.dest_path = None;
+        self.crypto_rx = None;
+        self.status = None;
+        self.show_password = false;
+        self.flow = AppFlow::FileDrop;
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.reencrypt_confirmed = false;
+        self.strength_frac = 0.0;
+        self.check_anim = 0.0;
+        self.scramble_text = String::from("0x0000...0000");
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    fn set_selected_file(&mut self, path: PathBuf) {
+        self.mode = if is_vx2_file(&path) {
+            Mode::Decrypt
+        } else {
+            Mode::Encrypt
+        };
+        self.selected_file = Some(path);
+        self.dest_path = None;
+        self.flow = AppFlow::Configure;
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.show_password = false;
+        self.status = None;
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.reencrypt_confirmed = false;
+        self.cancel_flag.store(false, Ordering::SeqCst);
+    }
+
+    fn pick_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new().pick_file() {
+            self.set_selected_file(path);
+        }
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.confirm_password = Zeroizing::new(String::new());
+            self.status = None;
+            self.reencrypt_confirmed = false;
+        }
+    }
+
+    fn screen_badge(&self) -> (&'static str, Color32, Color32) {
+        match self.flow {
+            AppFlow::FileDrop => ("LOCAL ONLY", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::Configure => match self.mode {
+                Mode::Encrypt => ("ENCRYPT", Palette::accent_muted(), Palette::TEXT_ACCENT),
+                Mode::Decrypt => ("DECRYPT", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            },
+            AppFlow::Processing => ("PROCESSING", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::Success => ("COMPLETE", Palette::success_muted(), Palette::SUCCESS),
+            AppFlow::Failure => ("ERROR", Palette::error_muted(), Palette::ERROR),
+        }
+    }
+
+    fn screen_title(&self) -> &'static str {
+        match self.flow {
+            AppFlow::FileDrop => "Protect a file on this device",
+            AppFlow::Configure => match self.mode {
+                Mode::Encrypt => "Review the file and encrypt it",
+                Mode::Decrypt => "Review the file and decrypt it",
+            },
+            AppFlow::Processing => "Working on your file",
+            AppFlow::Success => match self.mode {
+                Mode::Encrypt => "Encryption complete",
+                Mode::Decrypt => "Decryption complete",
+            },
+            AppFlow::Failure => "The operation did not finish",
+        }
+    }
+
+    fn screen_subtitle(&self) -> &'static str {
+        match self.flow {
+            AppFlow::FileDrop => {
+                "Drag a file here or browse from disk. Everything stays local to this machine."
+            }
+            AppFlow::Configure => {
+                "Choose the mode, enter a passphrase, and save the output as a new file."
+            }
+            AppFlow::Processing => {
+                "The current run is happening locally. Keep this window open until it finishes."
+            }
+            AppFlow::Success => {
+                "Your output file is ready. You can open its folder or start another run."
+            }
+            AppFlow::Failure => "Review the message below, then return to the start and try again.",
+        }
+    }
+
+    fn action_label(&self) -> &'static str {
+        match self.mode {
+            Mode::Encrypt => "Encrypt file",
+            Mode::Decrypt => "Decrypt file",
+        }
+    }
+
+    fn execute(&mut self, ctx: &egui::Context) {
+        let Some(file_path) = self.selected_file.clone() else {
+            return;
+        };
+
+        if self.password.chars().count() < crypto::MIN_PASSWORD_LEN {
+            self.status = Some(format!(
+                "Passphrase must be at least {} characters.",
+                crypto::MIN_PASSWORD_LEN
+            ));
+            return;
+        }
+
+        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
+            self.status = Some("Passphrases do not match.".to_owned());
+            return;
+        }
+
+        if self.mode == Mode::Encrypt && is_vx2_file(&file_path) && !self.reencrypt_confirmed {
+            self.status = Some("Re-encrypt acknowledgement required.".to_owned());
+            return;
+        }
+
+        let dst_name = preview_output_name(self.mode, &file_path);
+        let Some(dest) = rfd::FileDialog::new()
+            .set_directory(file_path.parent().unwrap_or(Path::new(".")))
+            .set_file_name(&dst_name)
+            .save_file()
+        else {
+            return;
+        };
+
+        self.dest_path = Some(dest.clone());
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.status = Some("Preparing secure file operation...".to_owned());
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        let (tx, rx) = mpsc::unbounded();
+        self.crypto_rx = Some(rx);
+        self.flow = AppFlow::Processing;
+
+        let password = self.password.clone();
+        let mode = self.mode;
+        let ctx_clone = ctx.clone();
+
+        std::thread::spawn(move || {
+            let reporter = MpscReporter { tx: tx.clone() };
+            let throttled_reporter = ThrottledReporter::new(&reporter);
+            let result = if mode == Mode::Encrypt {
+                crypto::encrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+            } else {
+                crypto::decrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+            };
+
+            match result {
+                Ok(_) => {
+                    let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned()));
+                }
+                Err(e) => {
+                    let _ = tx.try_send(GuiMsg::Error(e));
+                }
+            }
+
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn draw_title_bar(&mut self, ui: &mut egui::Ui) {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(rect, 0.0, Palette::BG);
+        painter.line_segment(
+            [
+                Pos2::new(rect.min.x, rect.max.y - 1.0),
+                Pos2::new(rect.max.x, rect.max.y - 1.0),
+            ],
+            Stroke::new(1.0, Palette::BORDER),
+        );
+
+        painter.rect_filled(
+            Rect::from_min_max(
+                Pos2::new(rect.min.x + 16.0, rect.min.y + 12.0),
+                Pos2::new(rect.min.x + 24.0, rect.min.y + 20.0),
+            ),
+            3.0,
+            Palette::ACCENT,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + 32.0, rect.min.y + 9.0),
+            Align2::LEFT_TOP,
+            "NEURON ENCRYPT",
+            FontId::new(13.0, FontFamily::Monospace),
+            Palette::TEXT_HI,
+        );
+        painter.text(
+            Pos2::new(rect.min.x + 32.0, rect.min.y + 25.0),
+            Align2::LEFT_TOP,
+            "Secure local file encryption",
+            FontId::new(10.0, FontFamily::Monospace),
+            Palette::TEXT_LO,
+        );
+
+        let drag_rect = Rect::from_min_max(
+            Pos2::new(rect.min.x, rect.min.y),
+            Pos2::new(rect.max.x - 126.0, rect.max.y),
+        );
+        let drag_response = ui.interact(drag_rect, ui.id().with("drag"), Sense::click_and_drag());
+        if drag_response.dragged() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+
+        let mut x = rect.max.x - 12.0;
+        for (kind, label, width) in [
+            ("close", "X", 30.0),
+            ("min", "-", 30.0),
+            ("pin", if self.stay_on_top { "PINNED" } else { "PIN" }, 54.0),
+        ] {
+            let button_rect = Rect::from_min_max(
+                Pos2::new(x - width, rect.center().y - 12.0),
+                Pos2::new(x, rect.center().y + 12.0),
+            );
+            let response = ui.interact(button_rect, ui.id().with(kind), Sense::click());
+
+            let (fill, stroke_color, text_color) = match kind {
+                "close" if response.hovered() => {
+                    (Palette::error_muted(), Palette::ERROR, Palette::ERROR)
+                }
+                "min" if response.hovered() => {
+                    (Palette::warning_muted(), Palette::WARNING, Palette::WARNING)
+                }
+                "pin" if self.stay_on_top || response.hovered() => (
+                    Palette::accent_muted(),
+                    Palette::ACCENT,
+                    Palette::TEXT_ACCENT,
