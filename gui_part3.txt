@@ -307,8 +307,10 @@
 impl eframe::App for NeuronEncryptApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped_files = ctx.input(|i| i.raw.dropped_files.clone());
-        if let Some(path) = dropped_files.first().and_then(|file| file.path.clone()) {
-            self.set_selected_file(path);
+        if self.flow != AppFlow::Processing {
+            if let Some(path) = dropped_files.first().and_then(|file| file.path.clone()) {
+                self.set_selected_file(path);
+            }
         }
 
         loop {
