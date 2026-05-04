@@ -355,6 +355,7 @@ impl NeuronEncryptApp {
         }
     }
 
+    #[allow(dead_code)]
     fn action_label(&self) -> &'static str {
         match self.mode {
             Mode::Encrypt => "Encrypt file",
@@ -448,9 +449,17 @@ impl NeuronEncryptApp {
                 Pos2::new(rect.min.x + 16.0, rect.min.y + 12.0),
                 Pos2::new(rect.min.x + 24.0, rect.min.y + 20.0),
             ),
-            3.0,
+            4.0,
             Palette::ACCENT,
         );
+        let dot_rect = Rect::from_min_max(
+            Pos2::new(rect.min.x + 14.0, rect.min.y + 10.0),
+            Pos2::new(rect.min.x + 26.0, rect.min.y + 22.0),
+        );
+        let dot_response = ui.interact(dot_rect, ui.id().with("dot_drag"), Sense::drag());
+        if dot_response.dragged() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
         painter.text(
             Pos2::new(rect.min.x + 32.0, rect.min.y + 9.0),
             Align2::LEFT_TOP,
@@ -534,11 +543,12 @@ impl NeuronEncryptApp {
     }
 
     fn draw_screen_header(&self, ui: &mut egui::Ui) {
+        let rounding = 11.0;
         let (badge, fill, text_color) = self.screen_badge();
         egui::Frame::none()
             .fill(fill)
             .stroke(Stroke::new(1.0, Palette::BORDER_MED))
-            .rounding(999.0)
+            .rounding(rounding)
             .inner_margin(6.0)
             .show(ui, |ui| {
                 ui.label(
@@ -616,10 +626,11 @@ impl NeuronEncryptApp {
     }
 
     fn draw_info_chip(&self, ui: &mut egui::Ui, label: &str, fill: Color32, text_color: Color32) {
+        let rounding = 11.0;
         egui::Frame::none()
             .fill(fill)
             .stroke(Stroke::new(1.0, Palette::BORDER))
-            .rounding(999.0)
+            .rounding(rounding)
             .inner_margin(6.0)
             .show(ui, |ui| {
                 ui.label(
@@ -633,6 +644,10 @@ impl NeuronEncryptApp {
     fn draw_file_drop(&mut self, ui: &mut egui::Ui) {
         ui.add_space(20.0);
 
+        let dropped_files = ui.ctx().input(|i| i.raw.dropped_files.clone());
+        if let Some(path) = dropped_files.first().and_then(|f| f.path.clone()) {
+            self.set_selected_file(path);
+        }
         let hover_drop = ui.ctx().input(|i| !i.raw.hovered_files.is_empty());
         let (rect, response) =
             ui.allocate_exact_size(vec2(ui.available_width(), 170.0), Sense::click());
@@ -1070,17 +1085,30 @@ impl NeuronEncryptApp {
                     .is_some_and(|path| is_vx2_file(path))
                 && !self.reencrypt_confirmed);
 
-        if self
-            .draw_button(
-                ui,
-                self.action_label(),
-                vec2(ui.available_width(), 44.0),
-                ButtonKind::Primary,
-                !disabled,
-            )
-            .clicked()
-            && !disabled
-        {
+        let is_vx2 = self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p));
+
+        if self.draw_button(
+            ui,
+            "ENCRYPT",
+            vec2(ui.available_width(), 44.0),
+            ButtonKind::Primary,
+            !disabled,
+        ).clicked() && !disabled {
+            self.mode = Mode::Encrypt;
+            self.execute(ctx);
+        }
+
+        ui.add_space(8.0);
+
+        let decrypt_disabled = self.password.is_empty() || !is_vx2;
+        if self.draw_button(
+            ui,
+            "DECRYPT",
+            vec2(ui.available_width(), 44.0),
+            ButtonKind::Secondary,
+            !decrypt_disabled,
+        ).clicked() && !decrypt_disabled {
+            self.mode = Mode::Decrypt;
             self.execute(ctx);
         }
     }
