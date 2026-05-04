@@ -1886,15 +1886,20 @@ impl eframe::App for NeuronEncryptApp {
                                 }
                             });
 
-                        ui.add_space(16.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "AES-256-GCM-SIV | Argon2id | HKDF-SHA512 | v{}",
-                                env!("CARGO_PKG_VERSION")
-                            ))
-                            .font(FontId::new(10.5, FontFamily::Monospace))
-                            .color(Palette::TEXT_LO),
-                        );
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                    .font(FontId::new(10.0, FontFamily::Monospace))
+                                    .color(Palette::TEXT_LO),
+                            );
+                            ui.hyperlink_to(
+                                egui::RichText::new("github.com/darkmaster0345/Neuron-Encrypt")
+                                    .font(FontId::new(10.0, FontFamily::Monospace))
+                                    .color(Palette::TEXT_LO),
+                                "https://github.com/darkmaster0345/Neuron-Encrypt",
+                            );
+                        });
                     });
                 });
             });
