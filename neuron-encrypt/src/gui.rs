@@ -1087,13 +1087,17 @@ impl NeuronEncryptApp {
 
         let is_vx2 = self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p));
 
-        if self.draw_button(
-            ui,
-            "ENCRYPT",
-            vec2(ui.available_width(), 44.0),
-            ButtonKind::Primary,
-            !disabled,
-        ).clicked() && !disabled {
+        if self
+            .draw_button(
+                ui,
+                "ENCRYPT",
+                vec2(ui.available_width(), 44.0),
+                ButtonKind::Primary,
+                !disabled,
+            )
+            .clicked()
+            && !disabled
+        {
             self.mode = Mode::Encrypt;
             self.execute(ctx);
         }
@@ -1101,13 +1105,17 @@ impl NeuronEncryptApp {
         ui.add_space(8.0);
 
         let decrypt_disabled = self.password.is_empty() || !is_vx2;
-        if self.draw_button(
-            ui,
-            "DECRYPT",
-            vec2(ui.available_width(), 44.0),
-            ButtonKind::Secondary,
-            !decrypt_disabled,
-        ).clicked() && !decrypt_disabled {
+        if self
+            .draw_button(
+                ui,
+                "DECRYPT",
+                vec2(ui.available_width(), 44.0),
+                ButtonKind::Secondary,
+                !decrypt_disabled,
+            )
+            .clicked()
+            && !decrypt_disabled
+        {
             self.mode = Mode::Decrypt;
             self.execute(ctx);
         }
