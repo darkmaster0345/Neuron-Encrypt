@@ -751,6 +751,216 @@ pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
     .into())
 }
 
+/// Stream-encrypt from any reader to any writer.
+/// Used by the CLI for stdin/stdout piping. Does not create temp files or handle renaming.
+pub fn encrypt_stream<R: Read + Seek, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    password: &[u8],
+    source_size: Option<u64>,
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<()> {
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(CryptoError::PassphraseTooShort(MIN_PASSWORD_LEN));
+    }
+
+    let mut salt = [0u8; SALT_V3_LEN];
+    let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut stream_nonce);
+
+    reporter.report(0.05, "Deriving encryption key (Argon2id)...");
+    let key = derive_key_v3(password, &salt)?;
+
+    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let mut encryptor = EncryptorBE32::from_aead(cipher, (&stream_nonce).into());
+
+    // Write header
+    writer.write_all(MAGIC_V3)?;
+    writer.write_all(&salt)?;
+    writer.write_all(&stream_nonce)?;
+
+    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut bytes_done: u64 = 0;
+    let mut chunk_counter: u64 = 0;
+    const IO_GOVERNOR_INTERVAL: u64 = 100;
+
+    loop {
+        let n = read_exact_or_eof(reader, &mut buf)?;
+        if n == 0 {
+            let ct = encryptor
+                .encrypt_last(&[][..])
+                .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+            writer.write_all(&ct)?;
+            break;
+        }
+
+        bytes_done += n as u64;
+        let frac = if let Some(total) = source_size {
+            if total > 0 {
+                0.10 + 0.85 * (bytes_done as f32 / total as f32)
+            } else {
+                0.95
+            }
+        } else {
+            0.50
+        };
+
+        let mut peek = [0u8; 1];
+        let peeked = reader.read(&mut peek)?;
+
+        if peeked == 0 {
+            reporter.report(frac, "Encrypting final chunk...");
+            let ct = encryptor
+                .encrypt_last(&buf[..n])
+                .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+            writer.write_all(&ct)?;
+            break;
+        } else {
+            reporter.report(frac, "Encrypting...");
+            let ct = encryptor
+                .encrypt_next(&buf[..n])
+                .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+            writer.write_all(&ct)?;
+            chunk_counter += 1;
+
+            if chunk_counter % IO_GOVERNOR_INTERVAL == 0 {
+                writer.flush()?;
+                std::thread::sleep(Duration::from_millis(5));
+            }
+
+            reader.seek(std::io::SeekFrom::Current(-1))?;
+        }
+    }
+
+    writer.flush()?;
+    reporter.report(1.00, "Encryption complete.");
+    Ok(())
+}
+
+/// Stream-decrypt from any reader to any writer.
+/// Used by the CLI for stdin/stdout piping. Does not create temp files or handle renaming.
+pub fn decrypt_stream<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    password: &[u8],
+    total_size: Option<u64>,
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<()> {
+    if password.len() < MIN_PASSWORD_LEN {
+        return Err(CryptoError::PassphraseTooShort(MIN_PASSWORD_LEN));
+    }
+
+    let mut magic = [0u8; 8];
+    reader.read_exact(&mut magic)?;
+
+    if &magic == MAGIC_V3 {
+        decrypt_stream_v3(reader, writer, password, total_size, reporter)
+    } else if &magic == MAGIC {
+        decrypt_stream_v2(reader, writer, password, reporter)
+    } else {
+        Err(CryptoError::InvalidMagic)
+    }
+}
+
+fn decrypt_stream_v3<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    password: &[u8],
+    total_size: Option<u64>,
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<()> {
+    let mut salt = [0u8; SALT_V3_LEN];
+    let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
+    reader.read_exact(&mut salt)?;
+    reader.read_exact(&mut stream_nonce)?;
+
+    reporter.report(0.05, "Deriving decryption key (Argon2id)...");
+    let key = derive_key_v3(password, &salt)?;
+
+    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let mut decryptor = DecryptorBE32::from_aead(cipher, (&stream_nonce).into());
+
+    let mut buf = vec![0u8; CHUNK_SIZE + TAG_LEN];
+    let mut bytes_done: u64 = 0;
+    let mut last_chunk: Option<Vec<u8>> = None;
+
+    loop {
+        let n = read_exact_or_eof(reader, &mut buf)?;
+        if n == 0 {
+            break;
+        }
+
+        if let Some(prev) = last_chunk.take() {
+            let frac = if let Some(total) = total_size {
+                if total > 0 {
+                    0.10 + 0.85 * (bytes_done as f32 / total as f32)
+                } else {
+                    0.50
+                }
+            } else {
+                0.50
+            };
+            reporter.report(frac, "Decrypting...");
+            let pt = decryptor
+                .decrypt_next(prev.as_slice())
+                .map_err(|_| CryptoError::DecryptionFailed)?;
+            writer.write_all(&pt)?;
+        }
+
+        bytes_done += n as u64;
+        last_chunk = Some(buf[..n].to_vec());
+    }
+
+    if let Some(final_data) = last_chunk {
+        reporter.report(0.95, "Decrypting final chunk...");
+        let pt = decryptor
+            .decrypt_last(final_data.as_slice())
+            .map_err(|_| CryptoError::DecryptionFailed)?;
+        writer.write_all(&pt)?;
+    }
+
+    writer.flush()?;
+    reporter.report(1.00, "Decryption complete.");
+    Ok(())
+}
+
+fn decrypt_stream_v2<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    password: &[u8],
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<()> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    reader.read_exact(&mut salt)?;
+    reader.read_exact(&mut nonce)?;
+
+    reporter.report(0.05, "Deriving decryption key (Argon2id)...");
+    let key = derive_key(password, &salt)?;
+
+    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let mut ciphertext = Vec::new();
+    reader.read_to_end(&mut ciphertext)?;
+
+    let aad = build_aad(&salt, &nonce);
+    reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)...");
+    let plaintext = cipher
+        .decrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: &ciphertext,
+                aad: &aad,
+            },
+        )
+        .map_err(|_| CryptoError::DecryptionFailed)?;
+    writer.write_all(&plaintext)?;
+
+    writer.flush()?;
+    reporter.report(1.00, "Decryption complete.");
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

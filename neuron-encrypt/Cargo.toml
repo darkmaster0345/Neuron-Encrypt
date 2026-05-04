@@ -36,6 +36,7 @@ chrono      = "0.4.38"
 crossbeam-channel = "0.5"
 hex = "0.4.3"
 clap = { version = "4", features = ["derive"] }
+indicatif = "0.17"
 
 [lints.clippy]
 explicit_auto_deref = "allow"
