@@ -166,8 +166,7 @@ fn constant_time_eq(a: &str, b: &str) -> bool {
 
     let len_diff = len_a ^ len_b;
     // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
-    let len_mismatch_flag =
-        (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
+    let len_mismatch_flag = (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
 
     // Combine byte comparison result with length mismatch flag
     // If either bytes don't match OR lengths don't match, final_result will be non-zero
@@ -387,7 +386,11 @@ impl NeuronEncryptApp {
             AppFlow::Success => ("COMPLETE", Palette::success_muted(), Palette::SUCCESS),
             AppFlow::Failure => ("ERROR", Palette::error_muted(), Palette::ERROR),
             AppFlow::BatchConfigure => ("BATCH", Palette::accent_muted(), Palette::TEXT_ACCENT),
-            AppFlow::BatchProcessing => ("BATCH · PROCESSING", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::BatchProcessing => (
+                "BATCH · PROCESSING",
+                Palette::accent_muted(),
+                Palette::TEXT_ACCENT,
+            ),
             AppFlow::BatchDone => ("BATCH · DONE", Palette::success_muted(), Palette::SUCCESS),
         }
     }
@@ -528,9 +531,7 @@ impl NeuronEncryptApp {
             ));
             return;
         }
-        if self.mode == Mode::Encrypt
-            && !constant_time_eq(&self.password, &self.confirm_password)
-        {
+        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
             self.status = Some("Passphrases do not match.".to_owned());
             return;
         }
@@ -584,7 +585,11 @@ impl NeuronEncryptApp {
                 let idx_copy = idx;
                 let total_copy = total;
                 let file_reporter = move |frac: f32, msg: &str| {
-                    let _ = tx_clone.try_send(GuiMsg::BatchFileProgress(idx_copy, frac, msg.to_owned()));
+                    let _ = tx_clone.try_send(GuiMsg::BatchFileProgress(
+                        idx_copy,
+                        frac,
+                        msg.to_owned(),
+                    ));
                     let _ = tx_clone.try_send(GuiMsg::Progress(
                         (idx_copy as f32 + frac) / total_copy as f32,
                         msg.to_owned(),
@@ -643,8 +648,6 @@ impl NeuronEncryptApp {
             self.flow = AppFlow::BatchConfigure;
         }
     }
-
-
 
     fn draw_title_bar(&mut self, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
@@ -1558,7 +1561,12 @@ impl NeuronEncryptApp {
         });
     }
 
-    fn draw_batch_configure(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, strength_label: &str) {
+    fn draw_batch_configure(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        strength_label: &str,
+    ) {
         ui.horizontal(|ui| {
             if self
                 .draw_button(ui, "< Back", vec2(92.0, 34.0), ButtonKind::Secondary, true)
@@ -1650,7 +1658,7 @@ impl NeuronEncryptApp {
     fn draw_batch_processing(&mut self, ui: &mut egui::Ui) {
         let files_count = self.batch_files.len();
         let idx = self.batch_current_index;
-        
+
         ui.vertical_centered(|ui| {
             ui.add_space(20.0);
             let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -1661,7 +1669,9 @@ impl NeuronEncryptApp {
             );
             ui.add_space(20.0);
 
-            let current_file_name = self.batch_files.get(idx)
+            let current_file_name = self
+                .batch_files
+                .get(idx)
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
@@ -1680,7 +1690,7 @@ impl NeuronEncryptApp {
             );
 
             ui.add_space(20.0);
-            
+
             // Overall progress
             let (rect, _) = ui.allocate_exact_size(vec2(320.0, 6.0), Sense::hover());
             let painter = ui.painter_at(rect);
@@ -1693,7 +1703,7 @@ impl NeuronEncryptApp {
             }
 
             ui.add_space(16.0);
-            
+
             // Current file progress text
             if let Some(status) = &self.status {
                 ui.label(
@@ -1717,15 +1727,28 @@ impl NeuronEncryptApp {
     fn draw_batch_result(&mut self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             ui.add_space(20.0);
-            
+
             let total = self.batch_results.len();
-            let success_count = self.batch_results.iter().filter(|r| r.dest_path.is_some()).count();
+            let success_count = self
+                .batch_results
+                .iter()
+                .filter(|r| r.dest_path.is_some())
+                .count();
             let has_errors = success_count < total;
-            
+
             let (icon_color, msg) = if success_count == total {
-                (Palette::SUCCESS, format!("Successfully processed all {} files.", total))
+                (
+                    Palette::SUCCESS,
+                    format!("Successfully processed all {} files.", total),
+                )
             } else if success_count > 0 {
-                (Palette::WARNING, format!("Processed {} of {} files. Some failed.", success_count, total))
+                (
+                    Palette::WARNING,
+                    format!(
+                        "Processed {} of {} files. Some failed.",
+                        success_count, total
+                    ),
+                )
             } else {
                 (Palette::ERROR, "All files failed to process.".to_string())
             };
@@ -1749,9 +1772,9 @@ impl NeuronEncryptApp {
                     .color(Palette::TEXT_HI)
                     .strong(),
             );
-            
+
             ui.add_space(16.0);
-            
+
             // Scrollable list of results
             egui::ScrollArea::vertical()
                 .max_height(200.0)
@@ -1761,11 +1784,21 @@ impl NeuronEncryptApp {
                         ui.horizontal(|ui| {
                             if let Some(err) = &res.error {
                                 ui.label(egui::RichText::new("✗").color(Palette::ERROR));
-                                ui.label(egui::RichText::new(truncate_chars(&res.src_name, 30)).color(Palette::TEXT_MED));
-                                ui.label(egui::RichText::new(truncate_chars(err, 30)).color(Palette::ERROR).size(10.0));
+                                ui.label(
+                                    egui::RichText::new(truncate_chars(&res.src_name, 30))
+                                        .color(Palette::TEXT_MED),
+                                );
+                                ui.label(
+                                    egui::RichText::new(truncate_chars(err, 30))
+                                        .color(Palette::ERROR)
+                                        .size(10.0),
+                                );
                             } else {
                                 ui.label(egui::RichText::new("✓").color(Palette::SUCCESS));
-                                ui.label(egui::RichText::new(truncate_chars(&res.src_name, 30)).color(Palette::TEXT_MED));
+                                ui.label(
+                                    egui::RichText::new(truncate_chars(&res.src_name, 30))
+                                        .color(Palette::TEXT_MED),
+                                );
                             }
                         });
                         ui.add_space(4.0);
@@ -1894,11 +1927,15 @@ impl eframe::App for NeuronEncryptApp {
 
                                 match self.flow {
                                     AppFlow::FileDrop => self.draw_file_drop(ui),
-                                    AppFlow::Configure => self.draw_configure(ui, ctx, strength_label),
+                                    AppFlow::Configure => {
+                                        self.draw_configure(ui, ctx, strength_label)
+                                    }
                                     AppFlow::Processing => self.draw_processing(ui),
                                     AppFlow::Success => self.draw_result(ui, true),
                                     AppFlow::Failure => self.draw_result(ui, false),
-                                    AppFlow::BatchConfigure => self.draw_batch_configure(ui, ctx, strength_label),
+                                    AppFlow::BatchConfigure => {
+                                        self.draw_batch_configure(ui, ctx, strength_label)
+                                    }
                                     AppFlow::BatchProcessing => self.draw_batch_processing(ui),
                                     AppFlow::BatchDone => self.draw_batch_result(ui),
                                 }

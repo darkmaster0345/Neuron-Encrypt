@@ -10,11 +10,11 @@ use std::time::Instant;
 #[cfg(target_os = "windows")]
 use std::time::SystemTime;
 
+use aead::stream::{DecryptorBE32, EncryptorBE32};
 use aes_gcm_siv::{
     aead::{Aead, KeyInit, Payload},
     Aes256GcmSiv, Nonce,
 };
-use aead::stream::{DecryptorBE32, EncryptorBE32};
 use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
@@ -660,7 +660,6 @@ fn decrypt_file_streaming(
     Ok(dest)
 }
 
-
 /// Attempts a 3-pass random overwrite, rename, and deletion of `path`.
 ///
 /// WARNING: This is not cryptographically guaranteed on SSDs, APFS, Btrfs, ZFS,
@@ -873,7 +872,10 @@ mod tests {
         let reporter = TestReporter;
 
         // Create a file larger than CHUNK_SIZE (2.5 MB)
-        let data: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + CHUNK_SIZE / 2).collect();
+        let data: Vec<u8> = (0u8..=255)
+            .cycle()
+            .take(CHUNK_SIZE * 2 + CHUNK_SIZE / 2)
+            .collect();
         fs::write(&src_path, &data).unwrap();
 
         encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
@@ -882,7 +884,13 @@ mod tests {
         let header = fs::read(&encrypted_path).unwrap();
         assert_eq!(&header[..8], MAGIC_V3);
 
-        decrypt_file(&encrypted_path, &decrypted_path, password.as_bytes(), &reporter).unwrap();
+        decrypt_file(
+            &encrypted_path,
+            &decrypted_path,
+            password.as_bytes(),
+            &reporter,
+        )
+        .unwrap();
         let result = fs::read(&decrypted_path).unwrap();
         assert_eq!(result, data);
 
@@ -905,7 +913,13 @@ mod tests {
         fs::write(&src_path, &data).unwrap();
 
         encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
-        decrypt_file(&encrypted_path, &decrypted_path, password.as_bytes(), &reporter).unwrap();
+        decrypt_file(
+            &encrypted_path,
+            &decrypted_path,
+            password.as_bytes(),
+            &reporter,
+        )
+        .unwrap();
         assert_eq!(fs::read(&decrypted_path).unwrap(), data);
 
         let _ = fs::remove_dir_all(tmp_dir);
@@ -926,7 +940,12 @@ mod tests {
         fs::write(&src_path, b"top secret data").unwrap();
         encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
 
-        let result = decrypt_file(&encrypted_path, &decrypted_path, wrong.as_bytes(), &reporter);
+        let result = decrypt_file(
+            &encrypted_path,
+            &decrypted_path,
+            wrong.as_bytes(),
+            &reporter,
+        );
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(tmp_dir);
