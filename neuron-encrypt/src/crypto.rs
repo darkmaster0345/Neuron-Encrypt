@@ -18,7 +18,7 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
 use sha2::Sha512;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{CryptoError, CryptoResult};
 
@@ -66,14 +66,8 @@ impl<'a> ProgressReporter for ThrottledReporter<'a> {
         let last_progress = f32::from_bits(self.last_progress.load(Ordering::Relaxed));
 
         let (last_message, last_time) = {
-            let message_guard = self
-                .last_message
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
-            let time_guard = self
-                .last_time
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner());
+            let message_guard = self.last_message.lock().expect("Mutex was poisoned");
+            let time_guard = self.last_time.lock().expect("Mutex was poisoned");
             (message_guard.clone(), *time_guard)
         };
 
@@ -117,6 +111,7 @@ fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> 
     let hkdf = Hkdf::<Sha512>::new(None, &intermediate);
     hkdf.expand(b"VAULTX02_AES_256_GCM_SIV", &mut final_key)
         .map_err(|error| CryptoError::HkdfFailed(error.to_string()))?;
+    intermediate.zeroize();
 
     Ok(final_key)
 }

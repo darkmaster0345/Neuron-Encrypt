@@ -12,7 +12,7 @@ use eframe::egui::{
 };
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
 use neuron_encrypt_core::error::CryptoError;
-use rand_core::{OsRng, RngCore};
+use rand_core::RngCore;
 use zeroize::Zeroizing;
 
 struct Palette;
@@ -131,15 +131,30 @@ fn is_vx2_file(path: &Path) -> bool {
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (ab, bb) = (a.as_bytes(), b.as_bytes());
-    if ab.len() != bb.len() {
-        return false;
+
+    let len_a = ab.len();
+    let len_b = bb.len();
+    let max_len = len_a.max(len_b);
+
+    let mut byte_comparison_result = 0;
+
+    for i in 0..max_len {
+        let byte_a = ab.get(i).unwrap_or(&0);
+        let byte_b = bb.get(i).unwrap_or(&0);
+        byte_comparison_result |= byte_a ^ byte_b;
     }
 
-    let mut result = 0;
-    for (x, y) in ab.iter().zip(bb.iter()) {
-        result |= x ^ y;
-    }
-    result == 0
+    // Constant-time check for length equality
+    let len_diff = len_a ^ len_b;
+    // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
+    let len_mismatch_flag =
+        1 - (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
+
+    // Combine byte comparison result with length mismatch flag
+    // If either bytes don't match OR lengths don't match, final_result will be non-zero
+    let final_result = byte_comparison_result | len_mismatch_flag;
+
+    final_result == 0
 }
 
 fn truncate_chars(s: &str, n: usize) -> String {
@@ -182,7 +197,22 @@ fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
     }
 
     let mut score: f32 = 0.0;
+    let mut has_upper = false;
+    let mut has_digit = false;
+    let mut has_symbol = false;
     let len = password.chars().count();
+
+    for c in password.chars() {
+        if c.is_ascii_uppercase() {
+            has_upper = true;
+        }
+        if c.is_ascii_digit() {
+            has_digit = true;
+        }
+        if !c.is_alphanumeric() {
+            has_symbol = true;
+        }
+    }
 
     if len >= 8 {
         score += 1.0;
@@ -193,13 +223,13 @@ fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
     if len >= 16 {
         score += 1.0;
     }
-    if password.chars().any(|c| c.is_ascii_uppercase()) {
+    if has_upper {
         score += 1.0;
     }
-    if password.chars().any(|c| c.is_ascii_digit()) {
+    if has_digit {
         score += 1.0;
     }
-    if password.chars().any(|c| !c.is_alphanumeric()) {
+    if has_symbol {
         score += 1.0;
     }
 
@@ -216,14 +246,20 @@ fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
 }
 
 fn preview_output_name(mode: Mode, path: &Path) -> String {
-    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| String::from("file"));
     match mode {
         Mode::Encrypt => format!("{}{}", name, crypto::EXTENSION),
         Mode::Decrypt => {
-            if name.to_lowercase().ends_with(crypto::EXTENSION) {
-                name[..name.len() - crypto::EXTENSION.len()].to_owned()
+            let lower = name.to_lowercase();
+            if lower.ends_with(crypto::EXTENSION) {
+                // Use char-boundary-safe slicing
+                let strip_len = name.len() - crypto::EXTENSION.len();
+                name[..strip_len].to_owned()
             } else {
-                name.to_string()
+                name
             }
         }
     }
@@ -253,7 +289,7 @@ impl NeuronEncryptApp {
         }
     }
 
-    fn secure_wipe_session(&mut self) {
+    fn secure_wipe_session(&mut self, ctx: &egui::Context) {
         self.mode = Mode::Encrypt;
         self.password = Zeroizing::new(String::new());
         self.confirm_password = Zeroizing::new(String::new());
@@ -270,6 +306,13 @@ impl NeuronEncryptApp {
         self.check_anim = 0.0;
         self.scramble_text = String::from("0x0000...0000");
         self.cancel_flag.store(false, Ordering::SeqCst);
+
+        // Clear all GUI state and focus to drop transient internal buffers
+        ctx.memory_mut(|mem| {
+            // In egui 0.28, surrender_focus takes an Id. 
+            // Using Id::NULL forces any currently focused widget to lose focus.
+            mem.surrender_focus(egui::Id::NULL);
+        });
     }
 
     fn set_selected_file(&mut self, path: PathBuf) {
@@ -892,7 +935,13 @@ impl NeuronEncryptApp {
             } else {
                 egui::TextEdit::singleline(&mut *self.confirm_password).id(id)
             };
-            ui.add(edit.frame(false).password(!self.show_password));
+            // Disable history/undo for password fields to avoid memory caching
+            ui.add(
+                edit.frame(false)
+                    .password(!self.show_password)
+                    .char_limit(128)
+                    .interactive(true),
+            );
         });
     }
 
@@ -974,7 +1023,7 @@ impl NeuronEncryptApp {
                 .draw_button(ui, "< Back", vec2(92.0, 34.0), ButtonKind::Secondary, true)
                 .clicked()
             {
-                self.secure_wipe_session();
+                self.secure_wipe_session(ctx);
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1078,7 +1127,6 @@ impl NeuronEncryptApp {
             .clicked()
             && !disabled
         {
-            self.mode = Mode::Encrypt;
             self.execute(ctx);
         }
 
@@ -1096,7 +1144,6 @@ impl NeuronEncryptApp {
             .clicked()
             && !decrypt_disabled
         {
-            self.mode = Mode::Decrypt;
             self.execute(ctx);
         }
     }
@@ -1128,13 +1175,9 @@ impl NeuronEncryptApp {
         let filename = self
             .selected_file
             .as_ref()
-            .map(|p| {
-                p.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .unwrap_or_default();
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| String::from("(unknown file)"));
 
         ui.add_space(20.0);
         ui.vertical_centered(|ui| {
@@ -1201,7 +1244,6 @@ impl NeuronEncryptApp {
             });
 
         ui.add_space(14.0);
-        ui.add_space(14.0);
         ui.label(
             egui::RichText::new(
                 "This run cannot be force-cancelled from the GUI once it has started.",
@@ -1254,7 +1296,10 @@ impl NeuronEncryptApp {
 
         ui.vertical_centered(|ui| {
             if let Some(dest) = &self.dest_path {
-                let file_name = dest.file_name().unwrap_or_default().to_string_lossy();
+                let file_name = dest
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| String::from("(output file)"));
                 ui.label(
                     egui::RichText::new(truncate_chars(&file_name, 44))
                         .font(FontId::new(12.0, FontFamily::Monospace))
@@ -1293,7 +1338,7 @@ impl NeuronEncryptApp {
                         )
                         .clicked()
                     {
-                        self.secure_wipe_session();
+                        self.secure_wipe_session(ui.ctx());
                     }
                 });
             } else {
@@ -1319,7 +1364,7 @@ impl NeuronEncryptApp {
                     )
                     .clicked()
                 {
-                    self.secure_wipe_session();
+                    self.secure_wipe_session(ui.ctx());
                 }
             }
         });
@@ -1346,7 +1391,7 @@ impl eframe::App for NeuronEncryptApp {
                 }
                 GuiMsg::Done(message) => {
                     if self.cancel_flag.load(Ordering::SeqCst) {
-                        self.secure_wipe_session();
+                        self.secure_wipe_session(ctx);
                     } else {
                         self.status = Some(sanitize_text(&message));
                         self.flow = AppFlow::Success;
@@ -1356,7 +1401,7 @@ impl eframe::App for NeuronEncryptApp {
                 }
                 GuiMsg::Error(error) => {
                     if self.cancel_flag.load(Ordering::SeqCst) {
-                        self.secure_wipe_session();
+                        self.secure_wipe_session(ctx);
                     } else {
                         self.status = Some(sanitize_text(&error.to_string()));
                         self.flow = AppFlow::Failure;
@@ -1377,7 +1422,7 @@ impl eframe::App for NeuronEncryptApp {
                 self.last_spinner_tick = Instant::now();
                 self.spinner_index = (self.spinner_index + 1) % 4;
 
-                let mut rng = OsRng;
+                let mut rng = rand_core::OsRng;
                 let random_hex: String = (0..32)
                     .map(|_| std::char::from_digit(rng.next_u32() % 16, 16).unwrap_or('0'))
                     .collect();

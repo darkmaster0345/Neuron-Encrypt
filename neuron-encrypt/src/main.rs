@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod gui;
 
 use eframe::egui::{self, Color32, Stroke};
@@ -18,7 +18,12 @@ impl Palette {
 fn load_icon() -> eframe::egui::IconData {
     let icon_data = include_bytes!("../assets/icon.ico");
     let image = image::load_from_memory(icon_data)
-        .expect("Failed to load icon")
+        .unwrap_or_else(|e| {
+            eprintln!("Error loading icon: {}", e);
+            // Provide a fallback or default icon data here
+            // For example, a small transparent image or a placeholder
+            image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))
+        })
         .into_rgba8();
     let (width, height) = image.dimensions();
     let rgba = image.into_raw();
@@ -30,6 +35,8 @@ fn load_icon() -> eframe::egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    // Enable backtraces in debug builds so panics are never silent.
+    #[cfg(debug_assertions)]
     std::env::set_var("RUST_BACKTRACE", "1");
     let viewport = egui::ViewportBuilder::default()
         .with_title("Neuron Encrypt")
@@ -65,7 +72,7 @@ fn main() -> eframe::Result<()> {
                 .push("JetBrainsMono".to_owned());
             cc.egui_ctx.set_fonts(fonts);
             apply_custom_theme(&cc.egui_ctx);
-            Box::new(gui::NeuronEncryptApp::new(cc))
+            Ok(Box::new(gui::NeuronEncryptApp::new(cc)))
         }),
     )
 }

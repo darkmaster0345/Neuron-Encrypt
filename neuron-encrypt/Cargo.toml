@@ -22,12 +22,12 @@ hkdf        = "0.12"
 sha2        = "0.10"
 zeroize     = { version = "1.7",  features = ["derive"] }
 rand_core   = { version = "0.6",  features = ["getrandom"] }
-image       = "0.24"
-eframe      = { version = "0.27", features = ["default"] }
-egui        = "0.27"
-rfd         = "0.14"
-thiserror   = "1.0"
-chrono      = "0.4"
+image       = "0.25"
+eframe      = { version = "0.28", features = ["default"] }
+egui        = "0.28"
+rfd         = "0.15"
+thiserror   = "1.0.61"
+chrono      = "0.4.38"
 crossbeam-channel = "0.5"
 hex = "0.4.3"
 
