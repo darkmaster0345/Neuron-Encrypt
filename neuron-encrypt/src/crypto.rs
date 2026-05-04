@@ -14,6 +14,7 @@ use aes_gcm_siv::{
     aead::{Aead, KeyInit, Payload},
     Aes256GcmSiv, Nonce,
 };
+use aead::stream::{DecryptorBE32, EncryptorBE32};
 use argon2::{Algorithm, Argon2, Params, Version};
 use hkdf::Hkdf;
 use rand_core::{OsRng, RngCore};
@@ -22,6 +23,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{CryptoError, CryptoResult};
 
+// ── V2 (legacy) constants ──
 pub const SALT_LEN: usize = 32;
 pub const NONCE_LEN: usize = 12;
 pub const HEADER_LEN: usize = 8 + SALT_LEN + NONCE_LEN;
@@ -29,9 +31,16 @@ pub const MAGIC: &[u8; 8] = b"VAULTX02";
 pub const TAG_LEN: usize = 16;
 pub const EXTENSION: &str = ".vx2";
 
-/// Hard cap on file size to avoid OOM crashes.
-/// AES-256-GCM-SIV currently requires the entire plaintext in memory at once.
-pub const MAX_FILE_SIZE: u64 = 2_000_000_000;
+// ── V3 (streaming) constants ──
+pub const MAGIC_V3: &[u8; 8] = b"VAULTX03";
+/// EncryptorBE32 uses 5 bytes of the 12-byte nonce (4-byte counter + 1-byte flag).
+pub const STREAM_NONCE_LEN: usize = 7;
+pub const HEADER_V3_LEN: usize = 8 + SALT_LEN + STREAM_NONCE_LEN; // 47
+/// 1 MB chunks — balances memory usage vs per-chunk overhead.
+pub const CHUNK_SIZE: usize = 1_048_576;
+
+// ── V2 legacy limits (kept for backward-compat decryption) ──
+pub const MAX_FILE_SIZE: u64 = 8_000_000_000;
 pub const MAX_ENCRYPTED_FILE_SIZE: u64 = MAX_FILE_SIZE + HEADER_LEN as u64 + TAG_LEN as u64;
 
 /// Minimum passphrase length for security.
@@ -113,6 +122,24 @@ fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> 
         .map_err(|error| CryptoError::HkdfFailed(error.to_string()))?;
     intermediate.zeroize();
 
+    Ok(final_key)
+}
+
+/// V3 key derivation — same Argon2id + HKDF pipeline, different HKDF info
+/// for cryptographic domain separation from V2.
+fn derive_key_v3(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> {
+    let mut final_key = Zeroizing::new(vec![0u8; 32]);
+    let mut intermediate = Zeroizing::new(vec![0u8; 64]);
+    let params = Params::new(65_536, 3, 4, Some(64))
+        .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    argon2
+        .hash_password_into(password, salt, &mut intermediate)
+        .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
+    let hkdf = Hkdf::<Sha512>::new(None, &intermediate);
+    hkdf.expand(b"VAULTX03_AES_256_GCM_SIV_STREAM", &mut final_key)
+        .map_err(|e| CryptoError::HkdfFailed(e.to_string()))?;
+    intermediate.zeroize();
     Ok(final_key)
 }
 
@@ -324,75 +351,80 @@ pub fn encrypt_file(
         return Err(CryptoError::PassphraseTooShort(MIN_PASSWORD_LEN));
     }
 
-    let (file, source_metadata) = open_regular_file(src)?;
+    let (mut file, source_metadata) = open_regular_file(src)?;
     let dest = validate_destination_path(src, dest)?;
-
     let source_len = source_metadata.len();
-    if source_len > MAX_FILE_SIZE {
-        return Err(CryptoError::FileTooLarge {
-            size_gb: source_len as f64 / 1_000_000_000.0,
-            max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
-        });
-    }
-
-    reporter.report(0.10, "Reading source file...");
-    let mut plaintext_buffer = Vec::with_capacity(source_len as usize);
-    if file
-        .take(MAX_FILE_SIZE + 1)
-        .read_to_end(&mut plaintext_buffer)?
-        > MAX_FILE_SIZE as usize
-    {
-        return Err(CryptoError::FileTooLarge {
-            size_gb: (MAX_FILE_SIZE + 1) as f64 / 1_000_000_000.0,
-            max_gb: MAX_FILE_SIZE as f64 / 1_000_000_000.0,
-        });
-    }
-    let plaintext = Zeroizing::new(plaintext_buffer);
 
     let mut salt = [0u8; SALT_LEN];
-    let mut nonce_bytes = [0u8; NONCE_LEN];
+    let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
     OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut nonce_bytes);
+    OsRng.fill_bytes(&mut stream_nonce);
 
-    reporter.report(0.20, "Deriving encryption key (Argon2id)...");
-    let key = derive_key(password, &salt)?;
+    reporter.report(0.05, "Deriving encryption key (Argon2id)...");
+    let key = derive_key_v3(password, &salt)?;
 
-    reporter.report(0.50, "Encrypting data (AES-256-GCM-SIV)...");
     let cipher = Aes256GcmSiv::new(key.as_slice().into());
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let aad = build_aad(&salt, &nonce_bytes);
-    let ciphertext = Zeroizing::new(
-        cipher
-            .encrypt(
-                nonce,
-                Payload {
-                    msg: plaintext.as_ref(),
-                    aad: &aad,
-                },
-            )
-            .map_err(|error| CryptoError::EncryptionFailed(error.to_string()))?,
-    );
+    let mut encryptor = EncryptorBE32::from_aead(cipher, (&stream_nonce).into());
 
     let tmp = tmp_path(&dest);
-    reporter.report(
-        0.75,
-        &format!(
-            "Writing encrypted file: {}",
-            dest.file_name().unwrap_or_default().to_string_lossy()
-        ),
-    );
-
     let write_result = (|| -> CryptoResult<()> {
-        let mut file = fs::OpenOptions::new()
+        let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&tmp)?;
 
-        file.write_all(MAGIC)?;
-        file.write_all(&salt)?;
-        file.write_all(&nonce_bytes)?;
-        file.write_all(&ciphertext)?;
-        file.sync_all()?;
+        // Write V3 header
+        out.write_all(MAGIC_V3)?;
+        out.write_all(&salt)?;
+        out.write_all(&stream_nonce)?;
+
+        // Stream encryption in 1 MB chunks
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut bytes_done: u64 = 0;
+
+        loop {
+            let n = read_exact_or_eof(&mut file, &mut buf)?;
+            if n == 0 {
+                // Empty file or exact chunk boundary — finalize with empty last
+                let ct = encryptor
+                    .encrypt_last(&[][..])
+                    .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+                out.write_all(&ct)?;
+                break;
+            }
+
+            bytes_done += n as u64;
+            let frac = if source_len > 0 {
+                0.10 + 0.85 * (bytes_done as f32 / source_len as f32)
+            } else {
+                0.95
+            };
+
+            // Check if there is more data after this chunk
+            let mut peek = [0u8; 1];
+            let peeked = file.read(&mut peek)?;
+
+            if peeked == 0 {
+                // This is the last chunk
+                reporter.report(frac, "Encrypting final chunk...");
+                let ct = encryptor
+                    .encrypt_last(&buf[..n])
+                    .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+                out.write_all(&ct)?;
+                break;
+            } else {
+                // More data follows — encrypt as intermediate chunk
+                reporter.report(frac, "Encrypting...");
+                let ct = encryptor
+                    .encrypt_next(&buf[..n])
+                    .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+                out.write_all(&ct)?;
+                // Put the peeked byte back by seeking back 1
+                file.seek(std::io::SeekFrom::Current(-1))?;
+            }
+        }
+
+        out.sync_all()?;
         Ok(())
     })();
 
@@ -406,6 +438,20 @@ pub fn encrypt_file(
     Ok(dest)
 }
 
+/// Read up to `buf.len()` bytes, returning how many were read (may be less at EOF).
+fn read_exact_or_eof(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut total = 0;
+    while total < buf.len() {
+        match reader.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(total)
+}
+
 pub fn decrypt_file(
     src: &Path,
     dest: &Path,
@@ -416,6 +462,30 @@ pub fn decrypt_file(
         return Err(CryptoError::PassphraseTooShort(MIN_PASSWORD_LEN));
     }
 
+    // Read magic bytes to determine format version
+    let mut magic_buf = [0u8; 8];
+    {
+        let mut f = fs::File::open(src)?;
+        f.read_exact(&mut magic_buf)
+            .map_err(|_| CryptoError::FileTooSmall)?;
+    }
+
+    if &magic_buf == MAGIC {
+        decrypt_file_legacy(src, dest, password, reporter)
+    } else if &magic_buf == MAGIC_V3 {
+        decrypt_file_streaming(src, dest, password, reporter)
+    } else {
+        Err(CryptoError::InvalidMagic)
+    }
+}
+
+/// Legacy V2 decryption — loads entire file into RAM.
+fn decrypt_file_legacy(
+    src: &Path,
+    dest: &Path,
+    password: &[u8],
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<PathBuf> {
     let (file, source_metadata) = open_regular_file(src)?;
     let dest = validate_destination_path(src, dest)?;
     let source_len = source_metadata.len();
@@ -432,14 +502,8 @@ pub fn decrypt_file(
         });
     }
 
-    reporter.report(0.10, "Reading encrypted file...");
+    reporter.report(0.10, "Reading encrypted file (legacy V2)...");
     let raw = read_limited_file(file, MAX_ENCRYPTED_FILE_SIZE)?;
-    if raw.len() as u64 > MAX_ENCRYPTED_FILE_SIZE {
-        return Err(CryptoError::FileTooLarge {
-            size_gb: raw.len() as f64 / 1_000_000_000.0,
-            max_gb: MAX_ENCRYPTED_FILE_SIZE as f64 / 1_000_000_000.0,
-        });
-    }
 
     let (salt, nonce, ciphertext) = parse_header(&raw)?;
 
@@ -462,14 +526,7 @@ pub fn decrypt_file(
     );
 
     let tmp = tmp_path(&dest);
-    reporter.report(
-        0.75,
-        &format!(
-            "Writing decrypted file: {}",
-            dest.file_name().unwrap_or_default().to_string_lossy()
-        ),
-    );
-
+    reporter.report(0.75, "Writing decrypted file...");
     let write_result = (|| -> CryptoResult<()> {
         let mut file = fs::OpenOptions::new()
             .write(true)
@@ -500,6 +557,109 @@ pub fn decrypt_file(
     reporter.report(1.00, "Decryption complete.");
     Ok(dest)
 }
+
+/// V3 streaming decryption — constant memory usage.
+fn decrypt_file_streaming(
+    src: &Path,
+    dest: &Path,
+    password: &[u8],
+    reporter: &dyn ProgressReporter,
+) -> CryptoResult<PathBuf> {
+    let (mut file, source_metadata) = open_regular_file(src)?;
+    let dest = validate_destination_path(src, dest)?;
+    let file_len = source_metadata.len();
+    #[cfg(target_os = "windows")]
+    let (src_accessed, src_modified) = (
+        source_metadata.accessed().ok(),
+        source_metadata.modified().ok(),
+    );
+
+    if file_len < HEADER_V3_LEN as u64 + TAG_LEN as u64 {
+        return Err(CryptoError::FileTooSmall);
+    }
+
+    // Skip magic (already read by dispatcher), read salt + nonce
+    file.seek(std::io::SeekFrom::Start(8))?;
+    let mut salt = [0u8; SALT_LEN];
+    let mut stream_nonce = [0u8; STREAM_NONCE_LEN];
+    file.read_exact(&mut salt)?;
+    file.read_exact(&mut stream_nonce)?;
+
+    reporter.report(0.05, "Deriving decryption key (Argon2id)...");
+    let key = derive_key_v3(password, &salt)?;
+
+    let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    let mut decryptor = DecryptorBE32::from_aead(cipher, (&stream_nonce).into());
+
+    let encrypted_body = file_len - HEADER_V3_LEN as u64;
+    let enc_chunk_size = CHUNK_SIZE + TAG_LEN;
+
+    let tmp = tmp_path(&dest);
+    let write_result = (|| -> CryptoResult<()> {
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)?;
+
+        let mut buf = vec![0u8; enc_chunk_size];
+        let mut bytes_done: u64 = 0;
+        let mut last_chunk: Option<Vec<u8>> = None;
+
+        // Read all chunks, processing intermediate ones immediately
+        loop {
+            let n = read_exact_or_eof(&mut file, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+
+            // If we had a pending chunk, it wasn't the last — decrypt it now
+            if let Some(prev) = last_chunk.take() {
+                let frac = 0.10 + 0.85 * (bytes_done as f32 / encrypted_body as f32);
+                reporter.report(frac, "Decrypting...");
+                let pt = decryptor
+                    .decrypt_next(prev.as_slice())
+                    .map_err(|_| CryptoError::DecryptionFailed)?;
+                out.write_all(&pt)?;
+            }
+
+            bytes_done += n as u64;
+            last_chunk = Some(buf[..n].to_vec());
+        }
+
+        // Process the final chunk
+        if let Some(final_data) = last_chunk {
+            reporter.report(0.95, "Decrypting final chunk...");
+            let pt = decryptor
+                .decrypt_last(final_data.as_slice())
+                .map_err(|_| CryptoError::DecryptionFailed)?;
+            out.write_all(&pt)?;
+        }
+
+        out.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+
+    persist_temp_file(&tmp, &dest)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(file) = fs::File::open(&dest) {
+            let times = fs::FileTimes::new()
+                .set_accessed(src_accessed.unwrap_or(SystemTime::now()))
+                .set_modified(src_modified.unwrap_or(SystemTime::now()));
+            let _ = file.set_times(times);
+        }
+    }
+
+    reporter.report(1.00, "Decryption complete.");
+    Ok(dest)
+}
+
 
 /// Attempts a 3-pass random overwrite, rename, and deletion of `path`.
 ///
@@ -697,6 +857,106 @@ mod tests {
             result,
             Err(CryptoError::SourceAndDestinationSame(_))
         ));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_v3_stream_roundtrip_multi_chunk() {
+        let tmp_dir = unique_test_dir();
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let src_path = tmp_dir.join("big.bin");
+        let encrypted_path = tmp_dir.join("big.vx2");
+        let decrypted_path = tmp_dir.join("big_dec.bin");
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+
+        // Create a file larger than CHUNK_SIZE (2.5 MB)
+        let data: Vec<u8> = (0u8..=255).cycle().take(CHUNK_SIZE * 2 + CHUNK_SIZE / 2).collect();
+        fs::write(&src_path, &data).unwrap();
+
+        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+
+        // Verify the file starts with VAULTX03
+        let header = fs::read(&encrypted_path).unwrap();
+        assert_eq!(&header[..8], MAGIC_V3);
+
+        decrypt_file(&encrypted_path, &decrypted_path, password.as_bytes(), &reporter).unwrap();
+        let result = fs::read(&decrypted_path).unwrap();
+        assert_eq!(result, data);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_v3_stream_roundtrip_exact_chunk() {
+        let tmp_dir = unique_test_dir();
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let src_path = tmp_dir.join("exact.bin");
+        let encrypted_path = tmp_dir.join("exact.vx2");
+        let decrypted_path = tmp_dir.join("exact_dec.bin");
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+
+        // Exactly 1 chunk
+        let data = vec![42u8; CHUNK_SIZE];
+        fs::write(&src_path, &data).unwrap();
+
+        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+        decrypt_file(&encrypted_path, &decrypted_path, password.as_bytes(), &reporter).unwrap();
+        assert_eq!(fs::read(&decrypted_path).unwrap(), data);
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_v3_wrong_password() {
+        let tmp_dir = unique_test_dir();
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let src_path = tmp_dir.join("secret.txt");
+        let encrypted_path = tmp_dir.join("secret.vx2");
+        let decrypted_path = tmp_dir.join("secret_dec.txt");
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let wrong = "y".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+
+        fs::write(&src_path, b"top secret data").unwrap();
+        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+
+        let result = decrypt_file(&encrypted_path, &decrypted_path, wrong.as_bytes(), &reporter);
+        assert!(result.is_err());
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_v2_backward_compat() {
+        // Manually create a V2-format encrypted file and verify decrypt_file can handle it
+        let tmp_dir = unique_test_dir();
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let plaintext = b"Legacy V2 content";
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+
+        let (ciphertext, salt, nonce) = encrypt_bytes(plaintext, password.as_bytes()).unwrap();
+
+        let v2_path = tmp_dir.join("legacy.vx2");
+        {
+            let mut f = fs::File::create(&v2_path).unwrap();
+            f.write_all(MAGIC).unwrap();
+            f.write_all(&salt).unwrap();
+            f.write_all(&nonce).unwrap();
+            f.write_all(&ciphertext).unwrap();
+            f.sync_all().unwrap();
+        }
+
+        let dec_path = tmp_dir.join("legacy_dec.txt");
+        decrypt_file(&v2_path, &dec_path, password.as_bytes(), &reporter).unwrap();
+        assert_eq!(fs::read(&dec_path).unwrap(), plaintext);
 
         let _ = fs::remove_dir_all(tmp_dir);
     }

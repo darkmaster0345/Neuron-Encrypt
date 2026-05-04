@@ -60,6 +60,9 @@ enum AppFlow {
     Processing,
     Success,
     Failure,
+    BatchConfigure,
+    BatchProcessing,
+    BatchDone,
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -81,6 +84,18 @@ enum GuiMsg {
     Progress(f32, String),
     Done(String),
     Error(CryptoError),
+    // Batch messages
+    BatchFileProgress(usize, f32, String), // (file_index, progress, message)
+    BatchFileDone(usize, PathBuf),         // (file_index, dest_path)
+    BatchFileError(usize, String),         // (file_index, error_message)
+    BatchAllDone,
+}
+
+#[derive(Clone)]
+struct BatchResult {
+    src_name: String,
+    dest_path: Option<PathBuf>,
+    error: Option<String>,
 }
 
 enum ButtonKind {
@@ -106,6 +121,11 @@ pub struct NeuronEncryptApp {
     flow: AppFlow,
     selected_file: Option<PathBuf>,
     dest_path: Option<PathBuf>,
+    // Batch
+    batch_files: Vec<PathBuf>,
+    batch_results: Vec<BatchResult>,
+    batch_current_index: usize,
+    batch_current_file_progress: f32,
     password: Zeroizing<String>,
     confirm_password: Zeroizing<String>,
     show_password: bool,
@@ -272,6 +292,10 @@ impl NeuronEncryptApp {
             flow: AppFlow::FileDrop,
             selected_file: None,
             dest_path: None,
+            batch_files: Vec::new(),
+            batch_results: Vec::new(),
+            batch_current_index: 0,
+            batch_current_file_progress: 0.0,
             password: Zeroizing::new(String::new()),
             confirm_password: Zeroizing::new(String::new()),
             show_password: false,
@@ -295,6 +319,10 @@ impl NeuronEncryptApp {
         self.confirm_password = Zeroizing::new(String::new());
         self.selected_file = None;
         self.dest_path = None;
+        self.batch_files.clear();
+        self.batch_results.clear();
+        self.batch_current_index = 0;
+        self.batch_current_file_progress = 0.0;
         self.crypto_rx = None;
         self.status = None;
         self.show_password = false;
@@ -309,7 +337,7 @@ impl NeuronEncryptApp {
 
         // Clear all GUI state and focus to drop transient internal buffers
         ctx.memory_mut(|mem| {
-            // In egui 0.28, surrender_focus takes an Id. 
+            // In egui 0.28, surrender_focus takes an Id.
             // Using Id::NULL forces any currently focused widget to lose focus.
             mem.surrender_focus(egui::Id::NULL);
         });
@@ -359,6 +387,9 @@ impl NeuronEncryptApp {
             AppFlow::Processing => ("PROCESSING", Palette::accent_muted(), Palette::TEXT_ACCENT),
             AppFlow::Success => ("COMPLETE", Palette::success_muted(), Palette::SUCCESS),
             AppFlow::Failure => ("ERROR", Palette::error_muted(), Palette::ERROR),
+            AppFlow::BatchConfigure => ("BATCH", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::BatchProcessing => ("BATCH · PROCESSING", Palette::accent_muted(), Palette::TEXT_ACCENT),
+            AppFlow::BatchDone => ("BATCH · DONE", Palette::success_muted(), Palette::SUCCESS),
         }
     }
 
@@ -375,6 +406,9 @@ impl NeuronEncryptApp {
                 Mode::Decrypt => "Decryption complete",
             },
             AppFlow::Failure => "The operation did not finish",
+            AppFlow::BatchConfigure => "Set up batch operation",
+            AppFlow::BatchProcessing => "Processing your files",
+            AppFlow::BatchDone => "Batch operation complete",
         }
     }
 
@@ -393,6 +427,15 @@ impl NeuronEncryptApp {
                 "Your output file is ready. You can open its folder or start another run."
             }
             AppFlow::Failure => "Review the message below, then return to the start and try again.",
+            AppFlow::BatchConfigure => {
+                "All files use the same passphrase. Output is saved beside each source file."
+            }
+            AppFlow::BatchProcessing => {
+                "Files are being processed one by one. Keep this window open until finished."
+            }
+            AppFlow::BatchDone => {
+                "Review per-file results below. Outputs are saved beside each original."
+            }
         }
     }
 
@@ -471,6 +514,138 @@ impl NeuronEncryptApp {
             ctx_clone.request_repaint();
         });
     }
+
+    /// Launch batch processing for all files in `self.batch_files`.
+    /// Files are processed sequentially in a background thread.
+    /// Each file's output is saved beside the source with the appropriate extension.
+    fn execute_batch(&mut self, ctx: &egui::Context) {
+        if self.batch_files.is_empty() {
+            return;
+        }
+        if self.password.chars().count() < crypto::MIN_PASSWORD_LEN {
+            self.status = Some(format!(
+                "Passphrase must be at least {} characters.",
+                crypto::MIN_PASSWORD_LEN
+            ));
+            return;
+        }
+        if self.mode == Mode::Encrypt
+            && !constant_time_eq(&self.password, &self.confirm_password)
+        {
+            self.status = Some("Passphrases do not match.".to_owned());
+            return;
+        }
+
+        // Build initial BatchResult placeholders
+        self.batch_results = self
+            .batch_files
+            .iter()
+            .map(|p| BatchResult {
+                src_name: p
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| String::from("(unknown)")),
+                dest_path: None,
+                error: None,
+            })
+            .collect();
+
+        self.batch_current_index = 0;
+        self.batch_current_file_progress = 0.0;
+        self.progress = 0.0;
+        self.prog_frac = 0.0;
+        self.cancel_flag.store(false, Ordering::SeqCst);
+
+        let (tx, rx) = mpsc::unbounded();
+        self.crypto_rx = Some(rx);
+        self.flow = AppFlow::BatchProcessing;
+
+        let password = self.password.clone();
+        let mode = self.mode;
+        let files = self.batch_files.clone();
+        let ctx_clone = ctx.clone();
+        let cancel = self.cancel_flag.clone();
+
+        std::thread::spawn(move || {
+            let total = files.len();
+
+            for (idx, src) in files.iter().enumerate() {
+                if cancel.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                let dest_name = preview_output_name(mode, src);
+                let dest = match src.parent() {
+                    Some(parent) => parent.join(&dest_name),
+                    None => std::path::PathBuf::from(&dest_name),
+                };
+
+                // Per-file progress reporter that maps 0..1 → slice of overall progress
+                let tx_clone = tx.clone();
+                let idx_copy = idx;
+                let total_copy = total;
+                let file_reporter = move |frac: f32, msg: &str| {
+                    let _ = tx_clone.try_send(GuiMsg::BatchFileProgress(idx_copy, frac, msg.to_owned()));
+                    let _ = tx_clone.try_send(GuiMsg::Progress(
+                        (idx_copy as f32 + frac) / total_copy as f32,
+                        msg.to_owned(),
+                    ));
+                };
+
+                struct FnReporter<F: Fn(f32, &str) + Send + Sync>(F);
+                impl<F: Fn(f32, &str) + Send + Sync> ProgressReporter for FnReporter<F> {
+                    fn report(&self, p: f32, m: &str) {
+                        (self.0)(p, m);
+                    }
+                }
+                let reporter = FnReporter(file_reporter);
+                let throttled = ThrottledReporter::new(&reporter);
+
+                let result = if mode == Mode::Encrypt {
+                    crypto::encrypt_file(src, &dest, password.as_bytes(), &throttled)
+                } else {
+                    crypto::decrypt_file(src, &dest, password.as_bytes(), &throttled)
+                };
+
+                match result {
+                    Ok(out_path) => {
+                        let _ = tx.try_send(GuiMsg::BatchFileDone(idx, out_path));
+                    }
+                    Err(e) => {
+                        let _ = tx.try_send(GuiMsg::BatchFileError(idx, e.to_string()));
+                    }
+                }
+
+                ctx_clone.request_repaint();
+            }
+
+            let _ = tx.try_send(GuiMsg::BatchAllDone);
+            ctx_clone.request_repaint();
+        });
+    }
+
+    fn pick_multiple_files(&mut self) {
+        if let Some(paths) = rfd::FileDialog::new().pick_files() {
+            let all_vx2 = paths.iter().all(|p| is_vx2_file(p));
+            let none_vx2 = paths.iter().all(|p| !is_vx2_file(p));
+            self.mode = if all_vx2 {
+                Mode::Decrypt
+            } else if none_vx2 {
+                Mode::Encrypt
+            } else {
+                // Mixed — default to encrypt; user can change
+                Mode::Encrypt
+            };
+            self.batch_files = paths;
+            self.batch_results.clear();
+            self.password = Zeroizing::new(String::new());
+            self.confirm_password = Zeroizing::new(String::new());
+            self.status = None;
+            self.flow = AppFlow::BatchConfigure;
+        }
+    }
+
+
 
     fn draw_title_bar(&mut self, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 44.0), Sense::hover());
@@ -745,18 +920,32 @@ impl NeuronEncryptApp {
         });
 
         ui.add_space(20.0);
+        ui.add_space(20.0);
+        let button_width = (ui.available_width() - 8.0) * 0.5;
         ui.horizontal_centered(|ui| {
             if self
                 .draw_button(
                     ui,
-                    "Browse files",
-                    vec2(160.0, 40.0),
+                    "Browse file",
+                    vec2(button_width, 40.0),
                     ButtonKind::Secondary,
                     true,
                 )
                 .clicked()
             {
                 self.pick_file();
+            }
+            if self
+                .draw_button(
+                    ui,
+                    "Batch upload",
+                    vec2(button_width, 40.0),
+                    ButtonKind::Secondary,
+                    true,
+                )
+                .clicked()
+            {
+                self.pick_multiple_files();
             }
         });
     }
@@ -1369,6 +1558,236 @@ impl NeuronEncryptApp {
             }
         });
     }
+
+    fn draw_batch_configure(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, strength_label: &str) {
+        ui.horizontal(|ui| {
+            if self
+                .draw_button(ui, "< Back", vec2(92.0, 34.0), ButtonKind::Secondary, true)
+                .clicked()
+            {
+                self.secure_wipe_session(ctx);
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.draw_mode_toggle(ui);
+            });
+        });
+
+        ui.add_space(16.0);
+        let files_count = self.batch_files.len();
+        self.draw_notice(
+            ui,
+            &format!("{} files selected", files_count),
+            "All files will be processed with the same passphrase.",
+            Palette::SURFACE_1,
+            Palette::BORDER,
+            Palette::TEXT_MED,
+        );
+
+        ui.add_space(18.0);
+        self.draw_password_row(ui, "Batch passphrase", true);
+
+        if self.mode == Mode::Encrypt {
+            ui.add_space(12.0);
+            self.draw_password_row(ui, "Confirm passphrase", false);
+
+            if !self.password.is_empty()
+                && !self.confirm_password.is_empty()
+                && !constant_time_eq(&self.password, &self.confirm_password)
+            {
+                ui.add_space(8.0);
+                self.draw_notice(
+                    ui,
+                    "Passphrases do not match",
+                    "Please ensure both fields contain the exact same text.",
+                    Palette::error_muted(),
+                    Palette::ERROR,
+                    Palette::ERROR,
+                );
+            }
+        }
+
+        ui.add_space(12.0);
+        self.draw_strength_meter(ui, strength_label);
+
+        ui.add_space(20.0);
+        let mut enabled = self.password.chars().count() >= crypto::MIN_PASSWORD_LEN;
+        if self.mode == Mode::Encrypt {
+            enabled &= constant_time_eq(&self.password, &self.confirm_password);
+        }
+
+        if let Some(msg) = &self.status {
+            ui.add_space(8.0);
+            self.draw_notice(
+                ui,
+                "Notice",
+                msg,
+                Palette::warning_muted(),
+                Palette::WARNING,
+                Palette::WARNING,
+            );
+            ui.add_space(12.0);
+        }
+
+        if self
+            .draw_button(
+                ui,
+                if self.mode == Mode::Encrypt {
+                    "Encrypt All Files"
+                } else {
+                    "Decrypt All Files"
+                },
+                vec2(ui.available_width(), 44.0),
+                ButtonKind::Primary,
+                enabled,
+            )
+            .clicked()
+            && enabled
+        {
+            self.execute_batch(ctx);
+        }
+    }
+
+    fn draw_batch_processing(&mut self, ui: &mut egui::Ui) {
+        let files_count = self.batch_files.len();
+        let idx = self.batch_current_index;
+        
+        ui.vertical_centered(|ui| {
+            ui.add_space(20.0);
+            let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+            ui.label(
+                egui::RichText::new(spinner[self.spinner_index % spinner.len()])
+                    .font(FontId::new(28.0, FontFamily::Monospace))
+                    .color(Palette::ACCENT),
+            );
+            ui.add_space(20.0);
+
+            let current_file_name = self.batch_files.get(idx)
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+
+            ui.label(
+                egui::RichText::new(format!("Processing file {} of {}", idx + 1, files_count))
+                    .font(FontId::new(14.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_HI)
+                    .strong(),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(truncate_chars(&current_file_name, 50))
+                    .font(FontId::new(11.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_MED),
+            );
+
+            ui.add_space(20.0);
+            
+            // Overall progress
+            let (rect, _) = ui.allocate_exact_size(vec2(320.0, 6.0), Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 3.0, Palette::SURFACE_2);
+            let p_width = rect.width() * self.prog_frac;
+            if p_width > 0.0 {
+                let p_rect =
+                    Rect::from_min_max(rect.min, Pos2::new(rect.min.x + p_width, rect.max.y));
+                painter.rect_filled(p_rect, 3.0, Palette::ACCENT);
+            }
+
+            ui.add_space(16.0);
+            
+            // Current file progress text
+            if let Some(status) = &self.status {
+                ui.label(
+                    egui::RichText::new(status)
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_LO),
+                );
+            }
+
+            ui.add_space(24.0);
+            if self
+                .draw_button(ui, "Cancel", vec2(120.0, 36.0), ButtonKind::Secondary, true)
+                .clicked()
+            {
+                self.cancel_flag.store(true, Ordering::SeqCst);
+                self.status = Some("Canceling operation...".to_owned());
+            }
+        });
+    }
+
+    fn draw_batch_result(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(20.0);
+            
+            let total = self.batch_results.len();
+            let success_count = self.batch_results.iter().filter(|r| r.dest_path.is_some()).count();
+            let has_errors = success_count < total;
+            
+            let (icon_color, msg) = if success_count == total {
+                (Palette::SUCCESS, format!("Successfully processed all {} files.", total))
+            } else if success_count > 0 {
+                (Palette::WARNING, format!("Processed {} of {} files. Some failed.", success_count, total))
+            } else {
+                (Palette::ERROR, "All files failed to process.".to_string())
+            };
+
+            // Draw generic icon
+            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.circle_filled(rect.center(), 24.0, icon_color);
+            painter.text(
+                rect.center(),
+                Align2::CENTER_CENTER,
+                if has_errors { "!" } else { "✓" },
+                FontId::new(24.0, FontFamily::Monospace),
+                Palette::SURFACE,
+            );
+
+            ui.add_space(16.0);
+            ui.label(
+                egui::RichText::new(msg)
+                    .font(FontId::new(14.0, FontFamily::Monospace))
+                    .color(Palette::TEXT_HI)
+                    .strong(),
+            );
+            
+            ui.add_space(16.0);
+            
+            // Scrollable list of results
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    for res in &self.batch_results {
+                        ui.horizontal(|ui| {
+                            if let Some(err) = &res.error {
+                                ui.label(egui::RichText::new("✗").color(Palette::ERROR));
+                                ui.label(egui::RichText::new(truncate_chars(&res.src_name, 30)).color(Palette::TEXT_MED));
+                                ui.label(egui::RichText::new(truncate_chars(err, 30)).color(Palette::ERROR).size(10.0));
+                            } else {
+                                ui.label(egui::RichText::new("✓").color(Palette::SUCCESS));
+                                ui.label(egui::RichText::new(truncate_chars(&res.src_name, 30)).color(Palette::TEXT_MED));
+                            }
+                        });
+                        ui.add_space(4.0);
+                    }
+                });
+
+            ui.add_space(20.0);
+            if self
+                .draw_button(
+                    ui,
+                    "Back to start",
+                    vec2(ui.available_width(), 40.0),
+                    ButtonKind::Primary,
+                    true,
+                )
+                .clicked()
+            {
+                self.secure_wipe_session(ui.ctx());
+            }
+        });
+    }
 }
 
 impl eframe::App for NeuronEncryptApp {
@@ -1383,7 +1802,6 @@ impl eframe::App for NeuronEncryptApp {
             let Some(msg) = msg else {
                 break;
             };
-
             match msg {
                 GuiMsg::Progress(progress, text) => {
                     self.progress = progress;
@@ -1408,6 +1826,30 @@ impl eframe::App for NeuronEncryptApp {
                     }
                     self.crypto_rx = None;
                 }
+                GuiMsg::BatchFileProgress(idx, progress, msg) => {
+                    self.batch_current_index = idx;
+                    self.batch_current_file_progress = progress;
+                    self.status = Some(truncate_chars(&sanitize_text(&msg), 72));
+                }
+                GuiMsg::BatchFileDone(idx, dest_path) => {
+                    if let Some(res) = self.batch_results.get_mut(idx) {
+                        res.dest_path = Some(dest_path);
+                    }
+                }
+                GuiMsg::BatchFileError(idx, err_msg) => {
+                    if let Some(res) = self.batch_results.get_mut(idx) {
+                        res.error = Some(err_msg);
+                    }
+                }
+                GuiMsg::BatchAllDone => {
+                    if self.cancel_flag.load(Ordering::SeqCst) {
+                        self.secure_wipe_session(ctx);
+                    } else {
+                        self.flow = AppFlow::BatchDone;
+                        self.check_anim = 0.0;
+                    }
+                    self.crypto_rx = None;
+                }
             }
         }
 
@@ -1417,7 +1859,7 @@ impl eframe::App for NeuronEncryptApp {
             ctx.request_repaint_after(Duration::from_millis(32));
         }
 
-        if self.flow == AppFlow::Processing {
+        if self.flow == AppFlow::Processing || self.flow == AppFlow::BatchProcessing {
             if Instant::now().duration_since(self.last_spinner_tick) >= Duration::from_millis(80) {
                 self.last_spinner_tick = Instant::now();
                 self.spinner_index = (self.spinner_index + 1) % 4;
@@ -1456,6 +1898,9 @@ impl eframe::App for NeuronEncryptApp {
                                 AppFlow::Processing => self.draw_processing(ui),
                                 AppFlow::Success => self.draw_result(ui, true),
                                 AppFlow::Failure => self.draw_result(ui, false),
+                                AppFlow::BatchConfigure => self.draw_batch_configure(ui, ctx, strength_label),
+                                AppFlow::BatchProcessing => self.draw_batch_processing(ui),
+                                AppFlow::BatchDone => self.draw_batch_result(ui),
                             }
                         });
 

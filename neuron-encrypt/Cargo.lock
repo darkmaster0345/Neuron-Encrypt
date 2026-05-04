@@ -2606,6 +2606,7 @@ dependencies = [
 name = "neuron-encrypt"
 version = "1.0.0"
 dependencies = [
+ "aead",
  "aes-gcm-siv",
  "argon2",
  "chrono",

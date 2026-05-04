@@ -9,8 +9,11 @@ pub enum CryptoError {
     #[error("File too small to be a valid VAULTX02 encrypted file")]
     FileTooSmall,
 
-    #[error("Not a VAULTX02 encrypted file (bad magic bytes)")]
+    #[error("Not a valid Neuron Encrypt file (bad magic bytes)")]
     InvalidMagic,
+
+    #[error("Unsupported file format version: {0}")]
+    UnsupportedVersion(String),
 
     #[error("Wrong password or corrupted file")]
     DecryptionFailed,

@@ -35,6 +35,7 @@ Decryption works the same way: drop the `.vx2` file, enter the original password
 | Key Expansion | HKDF-SHA512 | Cryptographic domain separation |
 | Randomness | OS CSPRNG (OsRng) | Cryptographically secure |
 | Memory Safety | Zeroizing\<T\> | Keys zeroed from RAM on drop |
+| Streaming I/O | STREAM (EncryptorBE32) | Constant ~66 MB RAM regardless of file size |
 | File Writes | Atomic .tmp → rename | No partial files on crash |
 
 ### Security Parameters
@@ -48,12 +49,28 @@ Argon2id:
 
 AES-256-GCM-SIV:
   Key  : 256 bits
-  Nonce: 96 bits (12 bytes) — fresh per encryption
-  Tag  : 128 bits (16 bytes)
+  Tag  : 128 bits (16 bytes) per chunk
+
+Streaming:
+  Chunk Size : 1 MB (1,048,576 bytes)
+  Nonce      : 7 bytes (STREAM BE32 construction)
+  Max File   : ~4 Exabytes (2^32 × 1 MB)
 ```
 
 ### Encrypted File Format (.vx2)
 
+**V3 — Current (streaming, constant memory)**
+```
+Offset   Length   Content
+0        8        Magic: "VAULTX03"
+8        32       Argon2id salt
+40       7        STREAM nonce
+47       C+16     Encrypted chunk 0 + auth tag
+...      C+16     Encrypted chunk N-1 + auth tag
+last     ≤C+16    Encrypted final chunk + auth tag
+```
+
+**V2 — Legacy (still supported for decryption)**
 ```
 Offset   Length   Content
 0        8        Magic: "VAULTX02"
@@ -121,6 +138,14 @@ Compare against the checksums listed on the releases page.
 2. Enter the same password used to encrypt
 3. Click **DECRYPT**
 4. Original file restored in the same folder
+
+### Batch Processing
+
+1. Click **Batch upload** on the main screen
+2. Select multiple files in the file dialog
+3. Enter a single password for all files
+4. Click **Encrypt All Files** or **Decrypt All Files**
+5. Review the per-file results summary when complete
 
 ### Reinstalling / Updating
 
@@ -208,10 +233,10 @@ The GUI thread never touches crypto. All encryption runs in a background thread 
 
 ## Known Limitations
 
-- One file at a time — no batch encryption
 - Password only — no key files
-- 2 GB file size limit (by design, prevents OOM)
-- Encrypted files are ~68 bytes larger than originals
+- Encrypted files are slightly larger than originals (~47-byte header + 16-byte auth tag per 1 MB chunk)
+- Files encrypted with V3 (VAULTX03) cannot be decrypted by older versions of the app
+- egui text buffer may hold transient password copies during typing (inherent GUI framework limitation)
 
 ---
 
