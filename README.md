@@ -182,6 +182,209 @@ STRONG → recommended
 ELITE  → maximum security
 ```
 
+### CLI Usage
+
+Neuron Encrypt also ships with a full-featured command-line interface — `neuron-encrypt-cli` — for terminal users, shell scripts, CI/CD pipelines, and automation.
+
+#### Build the CLI
+
+```bash
+git clone https://github.com/darkmaster0345/Neuron-Encrypt.git
+cd Neuron-Encrypt/neuron-encrypt
+
+# Build CLI binary only (skip GUI dependencies)
+cargo build --release --bin neuron-encrypt-cli
+```
+
+Binary locations:
+```
+Linux   : target/release/neuron-encrypt-cli
+macOS   : target/release/neuron-encrypt-cli
+Windows : target/release/neuron-encrypt-cli.exe
+```
+
+Install globally (optional):
+```bash
+cp target/release/neuron-encrypt-cli /usr/local/bin/
+# or
+cargo install --path . --bin neuron-encrypt-cli
+```
+
+#### Encrypt a File
+
+```bash
+# Interactive (prompts for passphrase)
+neuron-encrypt-cli encrypt -i secret.pdf
+
+# With environment variable
+NEURON_PASSWORD='MyStr0ngP@ssw0rd!' neuron-encrypt-cli encrypt -i secret.pdf
+
+# Custom output path
+neuron-encrypt-cli encrypt -i secret.pdf -o vault/encrypted.vx2
+
+# Passphrase from file (best for scripts/CI)
+neuron-encrypt-cli encrypt -i secret.pdf --password-file /run/secrets/key
+```
+
+Output: `secret.pdf.vx2` — the original file is **never modified**.
+
+#### Decrypt a File
+
+```bash
+# Interactive
+neuron-encrypt-cli decrypt -i secret.pdf.vx2
+
+# With environment variable
+NEURON_PASSWORD='MyStr0ngP@ssw0rd!' neuron-encrypt-cli decrypt -i secret.pdf.vx2
+
+# Custom output path
+neuron-encrypt-cli decrypt -i secret.pdf.vx2 -o recovered.pdf
+```
+
+The `.vx2` extension is automatically stripped — output becomes `secret.pdf`.
+
+The CLI auto-detects VAULTX03 (streaming) and VAULTX02 (legacy) formats. No manual switching required.
+
+#### Global Options
+
+| Flag | Description |
+|------|-------------|
+| `-q, --quiet` | Suppress all non-error output |
+| `--no-progress` | Disable progress bar |
+| `--json` | Emit structured JSON output for automation |
+| `--password-file <PATH>` | Read passphrase from a file |
+| `-F, --force` | Overwrite existing output files |
+| `--completions <SHELL>` | Generate shell completions (bash, zsh, fish, powershell, elvish) |
+| `-V, --version` | Print version |
+| `-h, --help` | Print help with examples |
+
+#### Passphrase Methods
+
+The CLI supports three ways to provide a passphrase (minimum 8 characters):
+
+| Method | Example | Best For |
+|--------|---------|----------|
+| **Interactive prompt** | `neuron-encrypt-cli encrypt -i file.txt` | Everyday terminal use |
+| **Environment variable** | `NEURON_PASSWORD='pass' neuron-encrypt-cli encrypt -i file.txt` | Quick scripting |
+| **Password file** | `neuron-encrypt-cli encrypt -i file.txt --password-file key.txt` | CI/CD, secrets managers |
+
+Priority order: `--password-file` → `NEURON_PASSWORD` → interactive prompt.
+
+#### JSON Output
+
+The `--json` flag produces machine-readable output for scripting and CI/CD:
+
+```bash
+neuron-encrypt-cli encrypt -i secret.pdf --json
+```
+
+Success:
+```json
+{"status":"success","output_path":"secret.pdf.vx2","bytes_processed":24576,"duration_ms":152,"sha256":"a1b2c3d4...","error":null}
+```
+
+Error:
+```json
+{"status":"error","output_path":null,"bytes_processed":null,"duration_ms":98,"sha256":null,"error":"Wrong passphrase or corrupted file."}
+```
+
+Fields:
+
+| Field | Description |
+|-------|-------------|
+| `status` | `"success"` or `"error"` |
+| `output_path` | Absolute path to the output file |
+| `bytes_processed` | Size of the source file in bytes |
+| `duration_ms` | Wall-clock time in milliseconds |
+| `sha256` | SHA-256 hash of the original (encrypt) or decrypted (decrypt) file |
+| `error` | Error message, or `null` on success |
+
+#### Piping & Streams
+
+```bash
+# Encrypt to stdout → pipe anywhere
+neuron-encrypt-cli encrypt -i secret.pdf -o - --no-progress > encrypted.vx2
+
+# Encrypt → pipe over SSH
+neuron-encrypt-cli encrypt -i secret.pdf -o - | ssh user@host 'cat > secret.pdf.vx2'
+
+# Decrypt from stdin
+cat encrypted.vx2 | neuron-encrypt-cli decrypt -i - -o recovered.pdf
+
+# Decrypt from stdin → pipe to another tool
+cat backup.tar.gz.vx2 | neuron-encrypt-cli decrypt -i - -o - | tar -xz
+```
+
+> ⚠️ **Encryption from stdin** (`-i -`) is **not supported** — the streaming engine requires a seekable file to handle chunk boundaries. File input is required for encryption. **Decryption from stdin** works fine.
+
+#### Exit Codes
+
+| Code | Meaning | When |
+|------|---------|------|
+| `0` | **Success** | Operation completed successfully |
+| `1` | **Runtime Error** | I/O error, disk full, permission denied |
+| `2` | **Bad Input** | File not found, passphrase too short, output already exists |
+| `3` | **Wrong Password** | Incorrect passphrase or corrupted file |
+
+Use in scripts:
+```bash
+neuron-encrypt-cli decrypt -i backup.vx2 -o backup.tar.gz
+case $? in
+  0) echo "Decryption successful" ;;
+  3) echo "Wrong password!"; exit 1 ;;
+  *) echo "Unexpected error"; exit 1 ;;
+esac
+```
+
+#### Shell Completions
+
+```bash
+# Bash
+neuron-encrypt-cli --completions bash > /etc/bash_completion.d/neuron-encrypt-cli
+
+# Zsh
+neuron-encrypt-cli --completions zsh > ~/.zfunc/_neuron-encrypt-cli
+
+# Fish
+neuron-encrypt-cli --completions fish > ~/.config/fish/completions/neuron-encrypt-cli.fish
+
+# PowerShell
+neuron-encrypt-cli --completions powershell > neuron-encrypt-cli.ps1
+```
+
+#### CLI Examples
+
+```bash
+# Encrypt a file (interactive passphrase)
+neuron-encrypt-cli encrypt -i secret.pdf
+
+# Encrypt with custom output and JSON result
+neuron-encrypt-cli encrypt -i secret.pdf -o vault/secret.vx2 --json
+
+# Decrypt to a specific path
+neuron-encrypt-cli decrypt -i secret.vx2 -o recovered.pdf
+
+# Batch encrypt all .docx files
+export NEURON_PASSWORD='SecureBatchP@ss!'
+for f in *.docx; do
+  neuron-encrypt-cli encrypt -i "$f" --force
+done
+
+# CI/CD: encrypt with secrets manager
+neuron-encrypt-cli encrypt -i artifact.zip --json \
+  --password-file /secrets/encrypt-key | tee result.json
+
+# Verify integrity: compare SHA-256 from encrypt and decrypt
+neuron-encrypt-cli encrypt -i important.pdf    # note the SHA-256
+neuron-encrypt-cli decrypt -i important.pdf.vx2 # SHA-256 should match
+
+# Quiet mode (scripts)
+neuron-encrypt-cli encrypt -i secret.pdf -q
+
+# Pipe encrypted backup over SSH
+neuron-encrypt-cli encrypt -i backup.tar.gz -o - | ssh user@host 'cat > backup.vx2'
+```
+
 ---
 
 ## Windows Installer
@@ -221,6 +424,13 @@ Binary locations:
 Windows : target\release\neuron-encrypt.exe
 macOS   : target/release/neuron-encrypt
 Linux   : target/release/neuron-encrypt
+```
+
+CLI binary locations:
+```
+Windows : target\release\neuron-encrypt-cli.exe
+macOS   : target/release/neuron-encrypt-cli
+Linux   : target/release/neuron-encrypt-cli
 ```
 
 Windows users can also double-click `build.bat` instead.
@@ -305,7 +515,9 @@ The GUI thread never handles crypto. All encryption/decryption runs in a backgro
 │   │   ├── gui.rs       — full UI: screens, widgets, state machine
 │   │   ├── crypto.rs    — encryption, decryption, streaming, tests
 │   │   ├── error.rs     — CryptoError enum via thiserror
-│   │   └── lib.rs       — library crate root
+│   │   ├── lib.rs       — library crate root
+│   │   └── bin/
+│   │       └── cli.rs   — CLI binary: encrypt/decrypt from the terminal
 │   ├── assets/
 │   │   ├── icon.ico
 │   │   └── fonts/
