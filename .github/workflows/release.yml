@@ -108,7 +108,7 @@ jobs:
           fi
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd0f576693a0263f309 # v4.6.0
+        uses: actions/upload-artifact@6f51ac05695064433478fae208ccf1c1f09c99a1 # v4.6.0
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
@@ -122,7 +122,7 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Download Windows build artifact
-        uses: actions/download-artifact@cc203385981b70ca67e8cc428c7977c3e1817be4 # v4.1.8
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
         with:
           name: NeuronEncrypt-Windows.exe
           path: .
@@ -150,7 +150,7 @@ jobs:
         shell: pwsh
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd0f576693a0263f309 # v4.6.0
+        uses: actions/upload-artifact@6f51ac05695064433478fae208ccf1c1f09c99a1 # v4.6.0
         with:
           name: NeuronEncrypt-Windows-x64-Setup.exe
           path: installer/NeuronEncrypt-Windows-x64-Setup.exe
