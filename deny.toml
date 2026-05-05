@@ -7,8 +7,10 @@ targets = [
 ]
 
 [advisories]
-ignore = []
-severity = "medium"
+version = 2
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
 
 [licenses]
 allow = [
@@ -31,7 +33,6 @@ license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-highlight-lines = 50
 
 [sources]
 unknown-registry = "deny"
