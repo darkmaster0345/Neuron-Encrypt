@@ -46,7 +46,7 @@ jobs:
         run: cargo install cargo-deny --locked
 
       - name: Run cargo deny
-        run: cargo deny --manifest-path neuron-encrypt/Cargo.toml check
+        run: cargo deny --manifest-path neuron-encrypt/Cargo.toml check -v
 
   build:
     name: Build for ${{ matrix.os }}
