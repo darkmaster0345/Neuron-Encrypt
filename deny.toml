@@ -30,6 +30,8 @@ allow = [
     "Zlib",
     "0BSD",
     "Libpng",
+    "OFL-1.1",
+    "LicenseRef-UFL-1.0",
     "curl",
 ]
 confidence-threshold = 0.93
@@ -37,6 +39,11 @@ confidence-threshold = 0.93
 [[licenses.clarify]]
 name = "ring"
 expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[[licenses.clarify]]
+name = "epaint"
+expression = "MIT OR Apache-2.0"
 license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
 
 [bans]
