@@ -22,6 +22,7 @@ allow = [
     "Zlib",
     "CC0-1.0",
     "BSL-1.0",
+    "Apache-2.0 WITH LLVM-exception",
 ]
 confidence-threshold = 0.93
 
