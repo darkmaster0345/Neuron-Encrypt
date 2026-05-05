@@ -30,7 +30,6 @@ allow = [
     "Unlicense",
     "Zlib",
     "0BSD",
-    "Unicode-Data-2018",
     "Libpng",
     "curl",
 ]
