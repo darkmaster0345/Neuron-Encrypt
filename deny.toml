@@ -31,7 +31,6 @@ allow = [
     "Zlib",
     "0BSD",
     "OFL-1.1",
-    "UFL-1.0",
 ]
 confidence-threshold = 0.93
 
