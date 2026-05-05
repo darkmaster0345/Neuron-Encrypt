@@ -64,6 +64,7 @@ jobs:
         with:
           toolchain: "1.80"
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
+          components: rustfmt, clippy
 
       - name: Check Formatting
         run: cargo fmt --check
