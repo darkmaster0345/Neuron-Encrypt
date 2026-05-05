@@ -31,7 +31,6 @@ allow = [
     "Zlib",
     "0BSD",
     "Unicode-Data-2018",
-    "Zlib-acknowledgement",
     "Libpng",
     "curl",
 ]
