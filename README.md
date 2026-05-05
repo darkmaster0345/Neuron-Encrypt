@@ -35,7 +35,7 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 - **I/O Governor for Large Files**: Prevents OS dirty page cache saturation during multi-gigabyte encryptions. Every ~100 MB the engine forces a disk flush and yields the thread, eliminating system-wide freezes.
 - **Automatic Legacy Detection**: Magic bytes at offset 0 determine format version. VAULTX02 files are routed to the legacy decryptor transparently.
 - **Windows Installer with .vx2 File Association**: NSIS-based setup installs to `Program Files`, creates Start Menu and Desktop shortcuts, and optionally associates `.vx2` files so double-clicking launches the app.
-
+- **Fast**: ~500 MB/s encryption speed on modern hardware (tested on core i7 10thgen )
 ---
 
 ## Features
