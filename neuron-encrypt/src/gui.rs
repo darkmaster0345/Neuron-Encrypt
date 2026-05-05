@@ -1725,9 +1725,7 @@ impl NeuronEncryptApp {
             } else if success_count > 0 {
                 (
                     Palette::WARNING,
-                    format!(
-                        "Processed {success_count} of {total} files. Some failed."
-                    ),
+                    format!("Processed {success_count} of {total} files. Some failed."),
                 )
             } else {
                 (Palette::ERROR, "All files failed to process.".to_string())
