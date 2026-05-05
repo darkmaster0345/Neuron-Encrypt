@@ -105,7 +105,7 @@ enum Command {
 fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
     if let Some(path) = password_file {
         let pw = fs::read_to_string(path).unwrap_or_else(|e| {
-            eprintln!("Error: Cannot read password file: {}", e);
+            eprintln!("Error: Cannot read password file: {e}");
             std::process::exit(ExitCode::BadInput as i32);
         });
         return Zeroizing::new(pw.trim_end_matches(&['\r', '\n'][..]).to_owned());
@@ -125,7 +125,7 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
                 return Zeroizing::new(pw);
             }
             Err(e) => {
-                eprintln!("Error reading passphrase: {}", e);
+                eprintln!("Error reading passphrase: {e}");
                 std::process::exit(ExitCode::BadInput as i32);
             }
         }
@@ -199,7 +199,7 @@ impl std::fmt::Display for HumanBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let b = self.0;
         if b < 1024 {
-            write!(f, "{} B", b)
+            write!(f, "{b} B")
         } else if b < 1024 * 1024 {
             write!(f, "{:.1} KB", b as f64 / 1024.0)
         } else if b < 1024 * 1024 * 1024 {
@@ -250,7 +250,7 @@ fn resolve_output(input_path: &Path, mode: &str, output_arg: &Option<String>) ->
             input_path
                 .parent()
                 .unwrap_or(Path::new("."))
-                .join(format!("{}.vx2", name))
+                .join(format!("{name}.vx2"))
         }
         "decrypt" => {
             let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -277,7 +277,7 @@ fn check_output_exists(path: &Path, force: bool, json: bool) -> Result<(), ExitC
                 error: Some(msg.clone()),
             });
         }
-        eprintln!("Error: {}", msg);
+        eprintln!("Error: {msg}");
         return Err(ExitCode::BadInput);
     }
     Ok(())
@@ -306,7 +306,7 @@ fn compute_sha256(path: &Path) -> Result<String, String> {
         hasher.update(&buf[..n]);
     }
     let result = hasher.finalize();
-    Ok(format!("{:x}", result))
+    Ok(format!("{result:x}"))
 }
 
 fn run() -> Result<(), ExitCode> {
@@ -341,7 +341,7 @@ fn run() -> Result<(), ExitCode> {
                 error: Some(msg.clone()),
             });
         }
-        eprintln!("Error: {}", msg);
+        eprintln!("Error: {msg}");
         return Err(ExitCode::BadInput);
     }
 
@@ -363,7 +363,7 @@ fn run() -> Result<(), ExitCode> {
                     error: Some(msg.clone()),
                 });
             }
-            eprintln!("Error: {}", msg);
+            eprintln!("Error: {msg}");
             return Err(ExitCode::BadInput);
         }
 
@@ -442,7 +442,7 @@ fn run() -> Result<(), ExitCode> {
                             elapsed as f64 / 1000.0
                         );
                         if let Some(h) = &hash {
-                            eprintln!("SHA-256 (original): {}", h);
+                            eprintln!("SHA-256 (original): {h}");
                         }
                     }
                 } else {
@@ -463,7 +463,7 @@ fn run() -> Result<(), ExitCode> {
                             elapsed as f64 / 1000.0
                         );
                         if let Some(h) = &hash {
-                            eprintln!("SHA-256 (decrypted): {}", h);
+                            eprintln!("SHA-256 (decrypted): {h}");
                         }
                     }
                 }
@@ -481,7 +481,7 @@ fn run() -> Result<(), ExitCode> {
                         error: Some(msg.into()),
                     });
                 } else {
-                    eprintln!("✗ {}", msg);
+                    eprintln!("✗ {msg}");
                 }
                 Err(ExitCode::WrongPassword)
             }
@@ -497,7 +497,7 @@ fn run() -> Result<(), ExitCode> {
                         error: Some(msg.clone()),
                     });
                 } else {
-                    eprintln!("✗ {}", msg);
+                    eprintln!("✗ {msg}");
                 }
                 Err(ExitCode::RuntimeError)
             }
@@ -547,13 +547,13 @@ fn run() -> Result<(), ExitCode> {
                         error: Some(msg.into()),
                     });
                 }
-                eprintln!("Error: {}", msg);
+                eprintln!("Error: {msg}");
                 return Err(ExitCode::BadInput);
             } else {
                 let mut f = match fs::File::open(&input_str) {
                     Ok(f) => f,
                     Err(e) => {
-                        let msg = format!("Cannot open input: {}", e);
+                        let msg = format!("Cannot open input: {e}");
                         if cli.json {
                             emit_json(&JsonResult {
                                 status: "error".into(),
@@ -564,7 +564,7 @@ fn run() -> Result<(), ExitCode> {
                                 error: Some(msg.clone()),
                             });
                         }
-                        eprintln!("Error: {}", msg);
+                        eprintln!("Error: {msg}");
                         return Err(ExitCode::BadInput);
                     }
                 };
@@ -590,7 +590,7 @@ fn run() -> Result<(), ExitCode> {
                 match fs::File::open(&input_str) {
                     Ok(f) => Box::new(f),
                     Err(e) => {
-                        let msg = format!("Cannot open input: {}", e);
+                        let msg = format!("Cannot open input: {e}");
                         if cli.json {
                             emit_json(&JsonResult {
                                 status: "error".into(),
@@ -601,7 +601,7 @@ fn run() -> Result<(), ExitCode> {
                                 error: Some(msg.clone()),
                             });
                         }
-                        eprintln!("Error: {}", msg);
+                        eprintln!("Error: {msg}");
                         return Err(ExitCode::BadInput);
                     }
                 }
@@ -646,7 +646,7 @@ fn run() -> Result<(), ExitCode> {
                         error: Some(msg.into()),
                     });
                 }
-                eprintln!("✗ {}", msg);
+                eprintln!("✗ {msg}");
                 Err(ExitCode::WrongPassword)
             }
             Err(e) => {
@@ -661,7 +661,7 @@ fn run() -> Result<(), ExitCode> {
                         error: Some(msg.clone()),
                     });
                 }
-                eprintln!("✗ {}", msg);
+                eprintln!("✗ {msg}");
                 Err(ExitCode::RuntimeError)
             }
         }

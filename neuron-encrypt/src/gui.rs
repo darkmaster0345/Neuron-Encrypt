@@ -207,7 +207,7 @@ fn sanitize_text(s: &str) -> String {
 
 fn format_size(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else if bytes < 1024 * 1024 * 1024 {
@@ -1022,7 +1022,7 @@ impl NeuronEncryptApp {
                 ui.add_space(12.0);
 
                 ui.label(
-                    egui::RichText::new(format!("Size   {}", size))
+                    egui::RichText::new(format!("Size   {size}"))
                         .font(FontId::new(10.5, FontFamily::Monospace))
                         .color(Palette::TEXT_MED),
                 );
@@ -1285,20 +1285,18 @@ impl NeuronEncryptApp {
             {
                 self.execute(ctx);
             }
-        } else {
-            if self
-                .draw_button(
-                    ui,
-                    "ENCRYPT",
-                    vec2(ui.available_width(), 44.0),
-                    ButtonKind::Primary,
-                    !disabled,
-                )
-                .clicked()
-                && !disabled
-            {
-                self.execute(ctx);
-            }
+        } else if self
+            .draw_button(
+                ui,
+                "ENCRYPT",
+                vec2(ui.available_width(), 44.0),
+                ButtonKind::Primary,
+                !disabled,
+            )
+            .clicked()
+            && !disabled
+        {
+            self.execute(ctx);
         }
     }
 
