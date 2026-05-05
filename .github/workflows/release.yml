@@ -20,11 +20,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.85.0"
+          toolchain: "1.80"
+          targets: x86_64-unknown-linux-gnu
 
-      - uses: rustsec/audit-check@v1.3.2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.21.1
+
+      - name: Run cargo audit
+        run: cargo audit
+        working-directory: neuron-encrypt
 
   dependency-audit:
     name: Dependency Audit (cargo deny)
