@@ -16,31 +16,45 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
       - name: Setup Rust (GNU)
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
           targets: x86_64-unknown-linux-gnu
-          
+
       - name: Install cargo-audit
         run: cargo install cargo-audit
-        
+
       - name: Configure cargo-audit severity
         run: |
           mkdir -p .cargo
           echo '[advisories]' > .cargo/audit.toml
           echo 'severity_threshold = "medium"' >> .cargo/audit.toml
         working-directory: neuron-encrypt
-        
+
       - name: Run cargo audit
         run: cargo audit
         working-directory: neuron-encrypt
 
+  dependency-audit:
+    name: Dependency Audit (cargo deny)
+    runs-on: ubuntu-latest
+    needs: audit
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Dependency Audit (cargo deny)
+        uses: EmbarkStudios/cargo-deny-action@v1
+        with:
+          command: check
+          arguments: --all-features
+          manifest-path: neuron-encrypt/Cargo.toml
+
   build:
     name: Build for ${{ matrix.os }}
-    needs: audit
+    needs: dependency-audit
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -59,7 +73,7 @@ jobs:
             asset_name: NeuronEncrypt-macOS
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Install Linux Dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -116,7 +130,7 @@ jobs:
           fi
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd0f576693a0263f309 # v4.6.0
         with:
           name: ${{ matrix.asset_name }}
           path: ${{ matrix.asset_name }}
@@ -127,10 +141,10 @@ jobs:
     runs-on: windows-latest
     needs: build
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Download Windows build artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@cc203385981b70ca67e8cc428c7977c3e1817be4 # v4.1.8
         with:
           name: NeuronEncrypt-Windows.exe
           path: .
@@ -158,7 +172,7 @@ jobs:
         shell: pwsh
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd0f576693a0263f309 # v4.6.0
         with:
           name: NeuronEncrypt-Windows-x64-Setup.exe
           path: installer/NeuronEncrypt-Windows-x64-Setup.exe

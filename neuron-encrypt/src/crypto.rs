@@ -442,7 +442,7 @@ pub fn encrypt_file(
                 chunk_counter += 1;
 
                 // I/O Governor: periodically flush dirty pages to prevent OS lag.
-                if chunk_counter % IO_GOVENER_INTERVAL == 0 {
+                if chunk_counter.is_multiple_of(IO_GOVENER_INTERVAL) {
                     out.sync_data()?;
                     std::thread::sleep(Duration::from_millis(5));
                 }
@@ -824,7 +824,7 @@ pub fn encrypt_stream<R: Read + Seek, W: Write>(
             writer.write_all(&ct)?;
             chunk_counter += 1;
 
-            if chunk_counter % IO_GOVERNOR_INTERVAL == 0 {
+            if chunk_counter.is_multiple_of(IO_GOVERNOR_INTERVAL) {
                 writer.flush()?;
                 std::thread::sleep(Duration::from_millis(5));
             }

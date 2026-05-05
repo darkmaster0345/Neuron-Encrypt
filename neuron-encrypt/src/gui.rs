@@ -1,3 +1,5 @@
+use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -13,7 +15,22 @@ use eframe::egui::{
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
 use neuron_encrypt_core::error::CryptoError;
 use rand_core::RngCore;
+use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
+
+fn compute_sha256(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
+}
 
 struct Palette;
 impl Palette {
@@ -82,11 +99,11 @@ enum Strength {
 
 enum GuiMsg {
     Progress(f32, String),
-    Done(String),
+    Done(String, Option<String>),
     Error(CryptoError),
     // Batch messages
     BatchFileProgress(usize, f32, String), // (file_index, progress, message)
-    BatchFileDone(usize, PathBuf),         // (file_index, dest_path)
+    BatchFileDone(usize, PathBuf, Option<String>), // (file_index, dest_path, sha256)
     BatchFileError(usize, String),         // (file_index, error_message)
     BatchAllDone,
 }
@@ -95,6 +112,7 @@ enum GuiMsg {
 struct BatchResult {
     src_name: String,
     dest_path: Option<PathBuf>,
+    sha256: Option<String>,
     error: Option<String>,
 }
 
@@ -120,6 +138,7 @@ pub struct NeuronEncryptApp {
     flow: AppFlow,
     selected_file: Option<PathBuf>,
     dest_path: Option<PathBuf>,
+    sha256_hash: Option<String>,
     // Batch
     batch_files: Vec<PathBuf>,
     batch_results: Vec<BatchResult>,
@@ -289,6 +308,7 @@ impl NeuronEncryptApp {
             flow: AppFlow::FileDrop,
             selected_file: None,
             dest_path: None,
+            sha256_hash: None,
             batch_files: Vec::new(),
             batch_results: Vec::new(),
             batch_current_index: 0,
@@ -316,6 +336,7 @@ impl NeuronEncryptApp {
         self.confirm_password = Zeroizing::new(String::new());
         self.selected_file = None;
         self.dest_path = None;
+        self.sha256_hash = None;
         self.batch_files.clear();
         self.batch_results.clear();
         self.batch_current_index = 0;
@@ -498,6 +519,13 @@ impl NeuronEncryptApp {
         std::thread::spawn(move || {
             let reporter = MpscReporter { tx: tx.clone() };
             let throttled_reporter = ThrottledReporter::new(&reporter);
+
+            let hash_source = if mode == Mode::Encrypt {
+                compute_sha256(&file_path)
+            } else {
+                None
+            };
+
             let result = if mode == Mode::Encrypt {
                 crypto::encrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
             } else {
@@ -506,7 +534,12 @@ impl NeuronEncryptApp {
 
             match result {
                 Ok(_) => {
-                    let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned()));
+                    let hash = if mode == Mode::Decrypt {
+                        compute_sha256(&dest)
+                    } else {
+                        hash_source
+                    };
+                    let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned(), hash));
                 }
                 Err(e) => {
                     let _ = tx.try_send(GuiMsg::Error(e));
@@ -546,6 +579,7 @@ impl NeuronEncryptApp {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| String::from("(unknown)")),
                 dest_path: None,
+                sha256: None,
                 error: None,
             })
             .collect();
@@ -613,7 +647,12 @@ impl NeuronEncryptApp {
 
                 match result {
                     Ok(out_path) => {
-                        let _ = tx.try_send(GuiMsg::BatchFileDone(idx, out_path));
+                        let hash = if mode == Mode::Decrypt {
+                            compute_sha256(&out_path)
+                        } else {
+                            compute_sha256(src)
+                        };
+                        let _ = tx.try_send(GuiMsg::BatchFileDone(idx, out_path, hash));
                     }
                     Err(e) => {
                         let _ = tx.try_send(GuiMsg::BatchFileError(idx, e.to_string()));
@@ -1423,6 +1462,26 @@ impl NeuronEncryptApp {
                 ui.add_space(14.0);
             }
 
+            if let Some(hash) = &self.sha256_hash {
+                ui.label(
+                    egui::RichText::new("SHA-256")
+                        .font(FontId::new(9.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_LO),
+                );
+                ui.add_space(2.0);
+                let hash_display = if hash.len() > 48 {
+                    format!("{}...{}", &hash[..24], &hash[hash.len() - 24..])
+                } else {
+                    hash.clone()
+                };
+                ui.label(
+                    egui::RichText::new(hash_display)
+                        .font(FontId::new(10.5, FontFamily::Monospace))
+                        .color(Palette::TEXT_LO),
+                );
+                ui.add_space(14.0);
+            }
+
             if ok {
                 let button_width = (ui.available_width() - 8.0) * 0.5;
                 ui.horizontal(|ui| {
@@ -1721,6 +1780,19 @@ impl NeuronEncryptApp {
                                     egui::RichText::new(truncate_chars(&res.src_name, 30))
                                         .color(Palette::TEXT_MED),
                                 );
+                                if let Some(hash) = &res.sha256 {
+                                    let short = if hash.len() > 16 {
+                                        format!("{}...", &hash[..16])
+                                    } else {
+                                        hash.clone()
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(short)
+                                            .color(Palette::TEXT_LO)
+                                            .size(9.0)
+                                            .font(FontId::new(9.0, FontFamily::Monospace)),
+                                    );
+                                }
                             }
                         });
                         ui.add_space(4.0);
@@ -1761,11 +1833,12 @@ impl eframe::App for NeuronEncryptApp {
                     self.progress = progress;
                     self.status = Some(truncate_chars(&sanitize_text(&text), 72));
                 }
-                GuiMsg::Done(message) => {
+                GuiMsg::Done(message, hash) => {
                     if self.cancel_flag.load(Ordering::SeqCst) {
                         self.secure_wipe_session(ctx);
                     } else {
                         self.status = Some(sanitize_text(&message));
+                        self.sha256_hash = hash;
                         self.flow = AppFlow::Success;
                         self.check_anim = 0.0;
                     }
@@ -1785,9 +1858,10 @@ impl eframe::App for NeuronEncryptApp {
                     self.batch_current_file_progress = progress;
                     self.status = Some(truncate_chars(&sanitize_text(&msg), 72));
                 }
-                GuiMsg::BatchFileDone(idx, dest_path) => {
+                GuiMsg::BatchFileDone(idx, dest_path, hash) => {
                     if let Some(res) = self.batch_results.get_mut(idx) {
                         res.dest_path = Some(dest_path);
+                        res.sha256 = hash;
                     }
                 }
                 GuiMsg::BatchFileError(idx, err_msg) => {
