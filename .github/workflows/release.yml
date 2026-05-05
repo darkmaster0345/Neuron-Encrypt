@@ -21,7 +21,7 @@ jobs:
       - name: Setup Rust (GNU)
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "1.80"
           targets: x86_64-unknown-linux-gnu
 
       - name: Install cargo-audit
@@ -44,6 +44,11 @@ jobs:
     needs: audit
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.80"
 
       - name: Dependency Audit (cargo deny)
         uses: EmbarkStudios/cargo-deny-action@v1
@@ -84,7 +89,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: "1.80"
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
 
       - name: Check Formatting
