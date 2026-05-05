@@ -43,7 +43,7 @@ jobs:
           toolchain: "1.85.0"
 
       - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
+        run: cargo install cargo-deny --version 0.18.3 --locked
 
       - name: Run cargo deny
         run: cargo deny --manifest-path neuron-encrypt/Cargo.toml check
