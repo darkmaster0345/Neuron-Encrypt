@@ -6,9 +6,9 @@ use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 #[cfg(target_os = "windows")]
 use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 use aead::stream::{DecryptorBE32, EncryptorBE32};
 use aes_gcm_siv::{
