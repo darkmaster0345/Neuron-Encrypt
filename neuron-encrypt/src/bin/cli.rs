@@ -379,7 +379,7 @@ fn run() -> Result<(), ExitCode> {
                     error: Some(msg.clone()),
                 });
             }
-            eprintln!("Warning: {}", msg);
+            eprintln!("Warning: {msg}");
             return Err(ExitCode::BadInput);
         }
 
