@@ -8,6 +8,11 @@ targets = [
 
 [advisories]
 version = 2
+ignore = [
+    { id = "RUSTSEC-2024-0388" },
+    { id = "RUSTSEC-2024-0389" },
+    { id = "RUSTSEC-2024-0336" },
+]
 
 [licenses]
 version = 2
@@ -35,6 +40,10 @@ allow = [
     "curl",
 ]
 confidence-threshold = 0.93
+
+[[licenses.exceptions]]
+name = "libc"
+allow = ["MIT", "Apache-2.0"]
 
 [[licenses.clarify]]
 name = "ring"
