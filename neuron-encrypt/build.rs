@@ -9,6 +9,6 @@ fn main() {
         .map(|s| s.trim().to_owned())
         .unwrap_or_else(|| "unknown".to_owned());
 
-    println!("cargo:rustc-env=GIT_HASH={}", git_hash);
+    println!("cargo:rustc-env=GIT_HASH={git_hash}");
     println!("cargo:rerun-if-changed=.git/HEAD");
 }
