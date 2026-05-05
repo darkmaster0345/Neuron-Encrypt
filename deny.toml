@@ -18,7 +18,7 @@ allow = [
     "BSD-2-Clause",
     "BSD-3-Clause",
     "ISC",
-    "Unicode-DFL",
+    "Unicode-3.0",
 ]
 deny = ["GPL-2.0", "GPL-3.0", "AGPL-3.0"]
 confidence-threshold = 0.93
