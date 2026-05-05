@@ -271,7 +271,7 @@ fn tmp_path(dest: &Path) -> PathBuf {
     let suffix = hex::encode(rng_bytes);
     let mut tmp = dest.to_path_buf();
     let name = dest.file_name().unwrap_or_default().to_string_lossy();
-    tmp.set_file_name(format!("{}.{}.tmp", name, suffix));
+    tmp.set_file_name(format!("{name}.{suffix}.tmp"));
     tmp
 }
 
