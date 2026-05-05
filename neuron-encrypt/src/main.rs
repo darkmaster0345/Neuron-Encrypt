@@ -19,7 +19,7 @@ fn load_icon() -> eframe::egui::IconData {
     let icon_data = include_bytes!("../assets/icon.ico");
     let image = image::load_from_memory(icon_data)
         .unwrap_or_else(|e| {
-            eprintln!("Error loading icon: {}", e);
+            eprintln!("Error loading icon: {e}");
             // Provide a fallback or default icon data here
             // For example, a small transparent image or a placeholder
             image::DynamicImage::ImageRgba8(image::RgbaImage::new(1, 1))

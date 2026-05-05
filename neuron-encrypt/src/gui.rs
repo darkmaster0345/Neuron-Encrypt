@@ -1342,7 +1342,7 @@ impl NeuronEncryptApp {
             );
             ui.add_space(8.0);
             ui.label(
-                egui::RichText::new(format!("{}%", percent))
+                egui::RichText::new(format!("{percent}%"))
                     .font(FontId::new(26.0, FontFamily::Monospace))
                     .color(Palette::TEXT_HI)
                     .strong(),
@@ -1563,7 +1563,7 @@ impl NeuronEncryptApp {
         let files_count = self.batch_files.len();
         self.draw_notice(
             ui,
-            &format!("{} files selected", files_count),
+            &format!("{files_count} files selected"),
             "All files will be processed with the same passphrase.",
             Palette::SURFACE_1,
             Palette::BORDER,
@@ -1720,14 +1720,13 @@ impl NeuronEncryptApp {
             let (icon_color, msg) = if success_count == total {
                 (
                     Palette::SUCCESS,
-                    format!("Successfully processed all {} files.", total),
+                    format!("Successfully processed all {total} files."),
                 )
             } else if success_count > 0 {
                 (
                     Palette::WARNING,
                     format!(
-                        "Processed {} of {} files. Some failed.",
-                        success_count, total
+                        "Processed {success_count} of {total} files. Some failed."
                     ),
                 )
             } else {
