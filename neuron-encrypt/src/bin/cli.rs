@@ -89,6 +89,9 @@ enum Command {
         /// Output file path (use "-" for stdout, defaults to input.vx2)
         #[arg(short, long)]
         output: Option<String>,
+        /// Skip passphrase confirmation prompt (for non-interactive/script use)
+        #[arg(long, default_value_t = false)]
+        no_confirm: bool,
     },
     /// Decrypt a file
     Decrypt {
@@ -112,6 +115,12 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
     }
 
     if let Ok(pw) = std::env::var("NEURON_PASSWORD") {
+        eprintln!(
+            "[WARN] NEURON_PASSWORD is set: password is visible in /proc/<pid>/environ \n       and may appear in shell history or process monitors."
+        );
+        eprintln!(
+            "[WARN] Prefer --password-file with a 0600-permission file for sensitive use."
+        );
         return Zeroizing::new(pw);
     }
 
@@ -130,6 +139,37 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
             }
         }
     }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, String> {
+    let pass1 = read_password(password_file);
+    let pass2 = loop {
+        match rpassword::prompt_password("Confirm passphrase: ") {
+            Ok(pw) => {
+                if pw.is_empty() {
+                    eprintln!("Error: Passphrase cannot be empty.");
+                    continue;
+                }
+                break Zeroizing::new(pw);
+            }
+            Err(e) => return Err(format!("Error reading passphrase: {e}")),
+        }
+    };
+    if !constant_time_eq(pass1.as_bytes(), pass2.as_bytes()) {
+        return Err("Passphrases do not match".to_owned());
+    }
+    Ok(pass1)
 }
 
 struct IndProgress {
@@ -320,11 +360,23 @@ fn run() -> Result<(), ExitCode> {
 
     let start = Instant::now();
     let (input_str, output_str, mode) = match &cli.command {
-        Command::Encrypt { input, output } => (input.clone(), output.clone(), "encrypt"),
+        Command::Encrypt { input, output, .. } => (input.clone(), output.clone(), "encrypt"),
         Command::Decrypt { input, output } => (input.clone(), output.clone(), "decrypt"),
     };
-
-    let password = read_password(&cli.password_file);
+    let password = match &cli.command {
+        Command::Encrypt { no_confirm, .. }
+            if std::env::var("NEURON_PASSWORD").is_err() && !no_confirm =>
+        {
+            match read_password_confirmed(&cli.password_file) {
+                Ok(password) => password,
+                Err(msg) => {
+                    eprintln!("Error: {msg}");
+                    return Err(ExitCode::BadInput);
+                }
+            }
+        }
+        _ => read_password(&cli.password_file),
+    };
 
     if mode == "encrypt" && password.len() < crypto::MIN_PASSWORD_LEN {
         let msg = format!(

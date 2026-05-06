@@ -386,6 +386,16 @@ pub fn encrypt_file(
 
     let tmp = tmp_path(&dest);
     let write_result = (|| -> CryptoResult<()> {
+        #[cfg(unix)]
+        let mut out = {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -530,8 +540,12 @@ fn decrypt_file_legacy(
         });
     }
 
+    eprintln!("[INFO] VAULTX02 (V2) format detected. Consider re-encrypting with V3 for streaming support and no memory limits.");
     reporter.report(0.10, "Reading encrypted file (legacy V2)...");
-    let raw = read_limited_file(file, MAX_ENCRYPTED_FILE_SIZE)?;
+    let raw = read_limited_file(file, 1_073_741_824u64)?;
+    if raw.len() as u64 > 1_073_741_824u64 {
+        return Err(CryptoError::LegacyFileTooLarge);
+    }
 
     let (salt, nonce, ciphertext) = parse_header(&raw)?;
 
@@ -556,6 +570,16 @@ fn decrypt_file_legacy(
     let tmp = tmp_path(&dest);
     reporter.report(0.75, "Writing decrypted file...");
     let write_result = (|| -> CryptoResult<()> {
+        #[cfg(unix)]
+        let mut file = {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -624,14 +648,24 @@ fn decrypt_file_streaming(
 
     let tmp = tmp_path(&dest);
     let write_result = (|| -> CryptoResult<()> {
+        #[cfg(unix)]
+        let mut out = {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?
+        };
+        #[cfg(not(unix))]
         let mut out = fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&tmp)?;
 
-        let mut buf = vec![0u8; enc_chunk_size];
+        let mut buf = Zeroizing::new(vec![0u8; enc_chunk_size]);
         let mut bytes_done: u64 = 0;
-        let mut last_chunk: Option<Vec<u8>> = None;
+        let mut last_chunk: Option<Zeroizing<Vec<u8>>> = None;
 
         // Read all chunks, processing intermediate ones immediately
         loop {
@@ -651,7 +685,7 @@ fn decrypt_file_streaming(
             }
 
             bytes_done += n as u64;
-            last_chunk = Some(buf[..n].to_vec());
+            last_chunk = Some(Zeroizing::new(buf[..n].to_vec()));
         }
 
         // Process the final chunk
@@ -881,9 +915,9 @@ fn decrypt_stream_v3<R: Read, W: Write>(
     let cipher = Aes256GcmSiv::new(key.as_slice().into());
     let mut decryptor = DecryptorBE32::from_aead(cipher, (&stream_nonce).into());
 
-    let mut buf = vec![0u8; CHUNK_SIZE + TAG_LEN];
+    let mut buf = Zeroizing::new(vec![0u8; CHUNK_SIZE + TAG_LEN]);
     let mut bytes_done: u64 = 0;
-    let mut last_chunk: Option<Vec<u8>> = None;
+    let mut last_chunk: Option<Zeroizing<Vec<u8>>> = None;
 
     loop {
         let n = read_exact_or_eof(reader, &mut buf)?;
@@ -909,7 +943,7 @@ fn decrypt_stream_v3<R: Read, W: Write>(
         }
 
         bytes_done += n as u64;
-        last_chunk = Some(buf[..n].to_vec());
+        last_chunk = Some(Zeroizing::new(buf[..n].to_vec()));
     }
 
     if let Some(final_data) = last_chunk {
@@ -931,6 +965,7 @@ fn decrypt_stream_v2<R: Read, W: Write>(
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<()> {
+    eprintln!("[INFO] VAULTX02 (V2) format detected. Consider re-encrypting with V3 for streaming support and no memory limits.");
     let mut salt = [0u8; SALT_LEN];
     let mut nonce = [0u8; NONCE_LEN];
     reader.read_exact(&mut salt)?;
@@ -940,8 +975,14 @@ fn decrypt_stream_v2<R: Read, W: Write>(
     let key = derive_key(password, &salt)?;
 
     let cipher = Aes256GcmSiv::new(key.as_slice().into());
+    const V2_STREAM_MAX_BYTES: u64 = 1_073_741_824;
     let mut ciphertext = Vec::new();
-    reader.read_to_end(&mut ciphertext)?;
+    reader
+        .take(V2_STREAM_MAX_BYTES)
+        .read_to_end(&mut ciphertext)?;
+    if ciphertext.len() as u64 >= V2_STREAM_MAX_BYTES {
+        return Err(CryptoError::LegacyFileTooLarge);
+    }
 
     let aad = build_aad(&salt, &nonce);
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)...");
