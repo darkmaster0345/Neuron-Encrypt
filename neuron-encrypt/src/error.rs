@@ -53,6 +53,9 @@ pub enum CryptoError {
 
     #[error("Passphrase too short (minimum {0} characters required)")]
     PassphraseTooShort(usize),
+
+    #[error("Legacy V2 file exceeds the 1 GB memory limit — re-encrypt with V3 format")]
+    LegacyFileTooLarge,
 }
 
 /// Result type alias for crypto operations.
