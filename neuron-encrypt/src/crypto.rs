@@ -206,7 +206,7 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a == b
 }
 
-fn validate_destination_path(src: &Path, dest: &Path) -> CryptoResult<PathBuf> {
+fn validate_destination_path(src: &Path, dest: &Path, overwrite: bool) -> CryptoResult<PathBuf> {
     let canonical_src = fs::canonicalize(src)?;
     let canonical_dest = normalize_destination_path(dest)?;
 
@@ -215,6 +215,7 @@ fn validate_destination_path(src: &Path, dest: &Path) -> CryptoResult<PathBuf> {
     }
 
     match fs::symlink_metadata(&canonical_dest) {
+        Ok(_) if overwrite => fs::remove_file(&canonical_dest)?,
         Ok(_) => return Err(CryptoError::FileAlreadyExists(canonical_dest)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(error.into()),
@@ -362,6 +363,7 @@ pub fn parse_header(raw: &[u8]) -> CryptoResult<(&[u8], &[u8], &[u8])> {
 pub fn encrypt_file(
     src: &Path,
     dest: &Path,
+    overwrite: bool,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
@@ -370,7 +372,7 @@ pub fn encrypt_file(
     }
 
     let (mut file, source_metadata) = open_regular_file(src)?;
-    let dest = validate_destination_path(src, dest)?;
+    let dest = validate_destination_path(src, dest, overwrite)?;
     let source_len = source_metadata.len();
 
     let mut salt = [0u8; SALT_V3_LEN];
@@ -493,6 +495,7 @@ fn read_exact_or_eof(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<
 pub fn decrypt_file(
     src: &Path,
     dest: &Path,
+    overwrite: bool,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
@@ -509,9 +512,9 @@ pub fn decrypt_file(
     }
 
     if &magic_buf == MAGIC {
-        decrypt_file_legacy(src, dest, password, reporter)
+        decrypt_file_legacy(src, dest, overwrite, password, reporter)
     } else if &magic_buf == MAGIC_V3 {
-        decrypt_file_streaming(src, dest, password, reporter)
+        decrypt_file_streaming(src, dest, overwrite, password, reporter)
     } else {
         Err(CryptoError::InvalidMagic)
     }
@@ -521,11 +524,12 @@ pub fn decrypt_file(
 fn decrypt_file_legacy(
     src: &Path,
     dest: &Path,
+    overwrite: bool,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
     let (file, source_metadata) = open_regular_file(src)?;
-    let dest = validate_destination_path(src, dest)?;
+    let dest = validate_destination_path(src, dest, overwrite)?;
     let source_len = source_metadata.len();
     #[cfg(target_os = "windows")]
     let (src_accessed, src_modified) = (
@@ -614,11 +618,12 @@ fn decrypt_file_legacy(
 fn decrypt_file_streaming(
     src: &Path,
     dest: &Path,
+    overwrite: bool,
     password: &[u8],
     reporter: &dyn ProgressReporter,
 ) -> CryptoResult<PathBuf> {
     let (mut file, source_metadata) = open_regular_file(src)?;
-    let dest = validate_destination_path(src, dest)?;
+    let dest = validate_destination_path(src, dest, overwrite)?;
     let file_len = source_metadata.len();
     #[cfg(target_os = "windows")]
     let (src_accessed, src_modified) = (
@@ -1043,12 +1048,13 @@ mod tests {
 
         fs::write(&src_path, b"File content for testing").unwrap();
 
-        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+        encrypt_file(&src_path, &encrypted_path, false, password.as_bytes(), &reporter).unwrap();
         assert!(encrypted_path.exists());
 
         decrypt_file(
             &encrypted_path,
             &decrypted_path,
+            false,
             password.as_bytes(),
             &reporter,
         )
@@ -1113,8 +1119,29 @@ mod tests {
         fs::write(&src_path, b"secret").unwrap();
         fs::write(&dest_path, b"already here").unwrap();
 
-        let result = encrypt_file(&src_path, &dest_path, password.as_bytes(), &reporter);
+        let result = encrypt_file(&src_path, &dest_path, false, password.as_bytes(), &reporter);
         assert!(matches!(result, Err(CryptoError::FileAlreadyExists(_))));
+
+        let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_encrypt_file_overwrites_existing_destination_with_force() {
+        let tmp_dir = unique_test_dir();
+        fs::create_dir_all(&tmp_dir).unwrap();
+
+        let src_path = tmp_dir.join("src.txt");
+        let dest_path = tmp_dir.join("dest.vx2");
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+
+        fs::write(&src_path, b"secret").unwrap();
+        fs::write(&dest_path, b"already here").unwrap();
+
+        let result = encrypt_file(&src_path, &dest_path, true, password.as_bytes(), &reporter);
+        assert!(result.is_ok());
+        assert!(dest_path.exists());
+        assert_ne!(fs::read(&dest_path).unwrap(), b"already here");
 
         let _ = fs::remove_dir_all(tmp_dir);
     }
@@ -1130,7 +1157,7 @@ mod tests {
 
         fs::write(&src_path, b"secret").unwrap();
 
-        let result = encrypt_file(&src_path, &src_path, password.as_bytes(), &reporter);
+        let result = encrypt_file(&src_path, &src_path, false, password.as_bytes(), &reporter);
         assert!(matches!(
             result,
             Err(CryptoError::SourceAndDestinationSame(_))
@@ -1157,7 +1184,7 @@ mod tests {
             .collect();
         fs::write(&src_path, &data).unwrap();
 
-        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+        encrypt_file(&src_path, &encrypted_path, false, password.as_bytes(), &reporter).unwrap();
 
         // Verify the file starts with VAULTX03
         let header = fs::read(&encrypted_path).unwrap();
@@ -1166,6 +1193,7 @@ mod tests {
         decrypt_file(
             &encrypted_path,
             &decrypted_path,
+            false,
             password.as_bytes(),
             &reporter,
         )
@@ -1191,10 +1219,11 @@ mod tests {
         let data = vec![42u8; CHUNK_SIZE];
         fs::write(&src_path, &data).unwrap();
 
-        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+        encrypt_file(&src_path, &encrypted_path, false, password.as_bytes(), &reporter).unwrap();
         decrypt_file(
             &encrypted_path,
             &decrypted_path,
+            false,
             password.as_bytes(),
             &reporter,
         )
@@ -1217,11 +1246,12 @@ mod tests {
         let reporter = TestReporter;
 
         fs::write(&src_path, b"top secret data").unwrap();
-        encrypt_file(&src_path, &encrypted_path, password.as_bytes(), &reporter).unwrap();
+        encrypt_file(&src_path, &encrypted_path, false, password.as_bytes(), &reporter).unwrap();
 
         let result = decrypt_file(
             &encrypted_path,
             &decrypted_path,
+            false,
             wrong.as_bytes(),
             &reporter,
         );
@@ -1253,7 +1283,7 @@ mod tests {
         }
 
         let dec_path = tmp_dir.join("legacy_dec.txt");
-        decrypt_file(&v2_path, &dec_path, password.as_bytes(), &reporter).unwrap();
+        decrypt_file(&v2_path, &dec_path, false, password.as_bytes(), &reporter).unwrap();
         assert_eq!(fs::read(&dec_path).unwrap(), plaintext);
 
         let _ = fs::remove_dir_all(tmp_dir);
