@@ -527,9 +527,9 @@ impl NeuronEncryptApp {
             };
 
             let result = if mode == Mode::Encrypt {
-                crypto::encrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+                crypto::encrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter)
             } else {
-                crypto::decrypt_file(&file_path, &dest, password.as_bytes(), &throttled_reporter)
+                crypto::decrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter)
             };
 
             match result {
@@ -640,9 +640,9 @@ impl NeuronEncryptApp {
                 let throttled = ThrottledReporter::new(&reporter);
 
                 let result = if mode == Mode::Encrypt {
-                    crypto::encrypt_file(src, &dest, password.as_bytes(), &throttled)
+                    crypto::encrypt_file(src, &dest, false, password.as_bytes(), &throttled)
                 } else {
-                    crypto::decrypt_file(src, &dest, password.as_bytes(), &throttled)
+                    crypto::decrypt_file(src, &dest, false, password.as_bytes(), &throttled)
                 };
 
                 match result {

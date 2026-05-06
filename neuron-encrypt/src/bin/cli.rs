@@ -468,9 +468,21 @@ fn run() -> Result<(), ExitCode> {
         let throttled = ThrottledReporter::new(reporter.as_ref());
 
         let result = if mode == "encrypt" {
-            crypto::encrypt_file(&input_path, &output_path, password.as_bytes(), &throttled)
+            crypto::encrypt_file(
+                &input_path,
+                &output_path,
+                cli.force,
+                password.as_bytes(),
+                &throttled,
+            )
         } else {
-            crypto::decrypt_file(&input_path, &output_path, password.as_bytes(), &throttled)
+            crypto::decrypt_file(
+                &input_path,
+                &output_path,
+                cli.force,
+                password.as_bytes(),
+                &throttled,
+            )
         };
 
         match result {
@@ -658,15 +670,57 @@ fn run() -> Result<(), ExitCode> {
                     }
                 }
             };
-            let stdout = io::stdout();
-            let mut stdout_lock = stdout.lock();
-            crypto::decrypt_stream(
-                &mut reader,
-                &mut stdout_lock,
-                password.as_bytes(),
-                source_size,
-                &throttled,
-            )
+            if is_pipe_out {
+                let stdout = io::stdout();
+                let mut stdout_lock = stdout.lock();
+                crypto::decrypt_stream(
+                    &mut reader,
+                    &mut stdout_lock,
+                    password.as_bytes(),
+                    source_size,
+                    &throttled,
+                )
+            } else if let Some(path) = output_str.as_deref() {
+                let mut out = match fs::File::create(path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        let msg = format!("Cannot open output: {e}");
+                        if cli.json {
+                            emit_json(&JsonResult {
+                                status: "error".into(),
+                                output_path: Some(path.to_owned()),
+                                bytes_processed: None,
+                                duration_ms: start.elapsed().as_millis(),
+                                sha256: None,
+                                error: Some(msg.clone()),
+                            });
+                        }
+                        eprintln!("Error: {msg}");
+                        return Err(ExitCode::BadInput);
+                    }
+                };
+                crypto::decrypt_stream(
+                    &mut reader,
+                    &mut out,
+                    password.as_bytes(),
+                    source_size,
+                    &throttled,
+                )
+            } else {
+                let msg = "Output path is required when decrypting piped input unless -o - is set.";
+                if cli.json {
+                    emit_json(&JsonResult {
+                        status: "error".into(),
+                        output_path: None,
+                        bytes_processed: None,
+                        duration_ms: start.elapsed().as_millis(),
+                        sha256: None,
+                        error: Some(msg.into()),
+                    });
+                }
+                eprintln!("Error: {msg}");
+                return Err(ExitCode::BadInput);
+            }
         };
 
         match result {
