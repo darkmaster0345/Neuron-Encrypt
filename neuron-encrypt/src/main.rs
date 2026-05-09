@@ -60,7 +60,7 @@ fn main() -> eframe::Result<()> {
             let mut fonts = egui::FontDefinitions::default();
             fonts
                 .font_data
-                .insert("JetBrainsMono".to_owned(), font_data);
+                .insert("JetBrainsMono".to_owned(), font_data.into());
             fonts
                 .families
                 .entry(egui::FontFamily::Monospace)
