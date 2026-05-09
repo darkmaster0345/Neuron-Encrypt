@@ -28,8 +28,8 @@ sha2        = "0.10"
 zeroize     = { version = "1.7",  features = ["derive"] }
 rand_core   = { version = "0.6",  features = ["getrandom"] }
 image       = "0.25"
-eframe      = { version = "0.28", features = ["default"] }
-egui        = "0.28"
+eframe      = { version = "0.33", features = ["default"] }
+egui        = "0.33"
 rfd         = "0.15"
 thiserror   = "1.0.61"
 chrono      = "0.4.38"
@@ -37,7 +37,7 @@ crossbeam-channel = "0.5"
 hex = "0.4.3"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
-indicatif = "0.17"
+indicatif = "0.18.4"
 rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
