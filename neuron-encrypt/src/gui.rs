@@ -239,10 +239,10 @@ fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
     let len = password.chars().count();
 
     for c in password.chars() {
-        if c.is_ascii_uppercase() {
+        if c.is_uppercase() {
             has_upper = true;
         }
-        if c.is_ascii_digit() {
+        if c.is_numeric() {
             has_digit = true;
         }
         if !c.is_alphanumeric() {
@@ -289,14 +289,9 @@ fn preview_output_name(mode: Mode, path: &Path) -> String {
     match mode {
         Mode::Encrypt => format!("{}{}", name, crypto::EXTENSION),
         Mode::Decrypt => {
-            let lower = name.to_lowercase();
-            if lower.ends_with(crypto::EXTENSION) {
-                // Use char-boundary-safe slicing
-                let strip_len = name.len() - crypto::EXTENSION.len();
-                name[..strip_len].to_owned()
-            } else {
-                name
-            }
+            name.strip_suffix(crypto::EXTENSION)
+                .map(|s| s.to_owned())
+                .unwrap_or(name)
         }
     }
 }
@@ -760,7 +755,12 @@ impl NeuronEncryptApp {
             };
 
             painter.rect_filled(button_rect, 7.0, fill);
-            painter.rect_stroke(button_rect, 7.0, Stroke::new(1.0, stroke_color));
+            painter.rect_stroke(
+                button_rect,
+                7.0,
+                Stroke::new(1.0, stroke_color),
+                egui::StrokeKind::Middle,
+            );
             painter.text(
                 button_rect.center(),
                 Align2::CENTER_CENTER,
@@ -784,10 +784,10 @@ impl NeuronEncryptApp {
     fn draw_screen_header(&self, ui: &mut egui::Ui) {
         let rounding = 11.0;
         let (badge, fill, text_color) = self.screen_badge();
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(fill)
             .stroke(Stroke::new(1.0, Palette::BORDER_MED))
-            .rounding(rounding)
+            .corner_radius(rounding)
             .inner_margin(6.0)
             .show(ui, |ui| {
                 ui.label(
@@ -845,7 +845,7 @@ impl NeuronEncryptApp {
         };
 
         painter.rect_filled(rect, 8.0, fill);
-        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, stroke_color));
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, stroke_color), egui::StrokeKind::Middle);
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -889,6 +889,7 @@ impl NeuronEncryptApp {
                     Palette::BORDER_MED
                 },
             ),
+            egui::StrokeKind::Middle,
         );
         painter.text(
             rect.center_top() + vec2(0.0, 42.0),
@@ -969,10 +970,10 @@ impl NeuronEncryptApp {
             .unwrap_or_else(|_| String::from("Unknown size"));
         let output = preview_output_name(self.mode, &path);
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(Palette::SURFACE_1)
             .stroke(Stroke::new(1.0, Palette::BORDER))
-            .rounding(10.0)
+            .corner_radius(10.0)
             .inner_margin(14.0)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1083,11 +1084,12 @@ impl NeuronEncryptApp {
                     Palette::BORDER
                 },
             ),
+            egui::StrokeKind::Middle,
         );
 
         let input_rect =
             Rect::from_min_max(rect.min + vec2(12.0, 11.0), rect.max - vec2(12.0, 11.0));
-        ui.allocate_ui_at_rect(input_rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(input_rect), |ui| {
             let edit = if primary {
                 egui::TextEdit::singleline(&mut *self.password).id(id)
             } else {
@@ -1154,10 +1156,10 @@ impl NeuronEncryptApp {
         border: Color32,
         text: Color32,
     ) {
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(fill)
             .stroke(Stroke::new(1.0, border))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.label(
@@ -1221,10 +1223,10 @@ impl NeuronEncryptApp {
                 .is_some_and(|path| is_vx2_file(path))
         {
             ui.add_space(14.0);
-            egui::Frame::none()
+            egui::Frame::new()
                 .fill(Palette::warning_muted())
                 .stroke(Stroke::new(1.0, Palette::WARNING))
-                .rounding(8.0)
+                .corner_radius(8.0)
                 .inner_margin(12.0)
                 .show(ui, |ui| {
                     ui.label(
@@ -1376,10 +1378,10 @@ impl NeuronEncryptApp {
         );
         ui.add_space(12.0);
 
-        egui::Frame::none()
+        egui::Frame::new()
             .fill(Palette::SURFACE_1)
             .stroke(Stroke::new(1.0, Palette::BORDER))
-            .rounding(8.0)
+            .corner_radius(8.0)
             .inner_margin(12.0)
             .show(ui, |ui| {
                 ui.label(
@@ -1899,17 +1901,17 @@ impl eframe::App for NeuronEncryptApp {
         }
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(Palette::BG))
+            .frame(egui::Frame::new().fill(Palette::BG))
             .show(ctx, |ui| {
                 self.draw_title_bar(ui);
                 ui.add_space(22.0);
 
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.vertical_centered(|ui| {
-                        egui::Frame::none()
+                        egui::Frame::new()
                             .fill(Palette::SURFACE)
                             .stroke(Stroke::new(1.0, Palette::BORDER))
-                            .rounding(12.0)
+                            .corner_radius(12.0)
                             .inner_margin(24.0)
                             .show(ui, |ui| {
                                 ui.set_width(520.0);

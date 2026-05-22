@@ -142,14 +142,27 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
+    let len_a = a.len();
+    let len_b = b.len();
+    let max_len = len_a.max(len_b);
+
+    let mut byte_comparison_result = 0;
+
+    for i in 0..max_len {
+        let byte_a = a.get(i).unwrap_or(&0);
+        let byte_b = b.get(i).unwrap_or(&0);
+        byte_comparison_result |= byte_a ^ byte_b;
     }
-    let mut diff = 0u8;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    diff == 0
+
+    let len_diff = len_a ^ len_b;
+    // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
+    let len_mismatch_flag = (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
+
+    // Combine byte comparison result with length mismatch flag
+    // If either bytes don't match OR lengths don't match, final_result will be non-zero
+    let final_result = byte_comparison_result | len_mismatch_flag;
+
+    final_result == 0
 }
 
 fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, String> {
@@ -185,18 +198,18 @@ impl IndProgress {
             ProgressStyle::with_template(
                 "[{bar:10.cyan/blue}] {percent}% | {msg} | {bytes:>7}/{total_bytes:7} | {bytes_per_sec} | ETA {eta}",
             )
-            .unwrap()
+            .expect("Invalid progress bar template")
             .with_key("bytes_per_sec", |state: &ProgressState, w: &mut dyn std::fmt::Write| {
-                write!(w, "{}/s", HumanBytes(state.pos())).unwrap();
+                write!(w, "{}/s", HumanBytes(state.pos())).expect("Failed to format bytes per second");
             })
             .progress_chars("##-")
         } else {
             ProgressStyle::with_template("{spinner} | {msg} | {bytes} | {bytes_per_sec}")
-                .unwrap()
+                .expect("Invalid progress bar spinner template")
                 .with_key(
                     "bytes_per_sec",
                     |state: &ProgressState, w: &mut dyn std::fmt::Write| {
-                        write!(w, "{}/s", HumanBytes(state.pos())).unwrap();
+                        write!(w, "{}/s", HumanBytes(state.pos())).expect("Failed to format bytes per second");
                     },
                 )
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -331,7 +344,10 @@ fn is_vx2_file(path: &Path) -> bool {
 }
 
 fn emit_json(result: &JsonResult) {
-    println!("{}", serde_json::to_string(result).unwrap());
+    println!(
+        "{}",
+        serde_json::to_string(result).expect("Failed to serialize JSON result")
+    );
 }
 
 fn compute_sha256(path: &Path) -> Result<String, String> {
