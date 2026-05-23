@@ -759,7 +759,7 @@ impl NeuronEncryptApp {
                 button_rect,
                 7.0,
                 Stroke::new(1.0, stroke_color),
-                egui::StrokeKind::Middle,
+                egui::StrokeKind::Outside,
             );
             painter.text(
                 button_rect.center(),
@@ -782,7 +782,7 @@ impl NeuronEncryptApp {
     }
 
     fn draw_screen_header(&self, ui: &mut egui::Ui) {
-        let rounding = 11.0;
+        let rounding = 12.0; // Perfect pill shape for approx 24px height
         let (badge, fill, text_color) = self.screen_badge();
         egui::Frame::new()
             .fill(fill)
@@ -845,7 +845,7 @@ impl NeuronEncryptApp {
         };
 
         painter.rect_filled(rect, 8.0, fill);
-        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, stroke_color), egui::StrokeKind::Middle);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, stroke_color), egui::StrokeKind::Outside);
         painter.text(
             rect.center(),
             Align2::CENTER_CENTER,
@@ -889,7 +889,7 @@ impl NeuronEncryptApp {
                     Palette::BORDER_MED
                 },
             ),
-            egui::StrokeKind::Middle,
+            egui::StrokeKind::Outside,
         );
         painter.text(
             rect.center_top() + vec2(0.0, 42.0),
@@ -1084,7 +1084,7 @@ impl NeuronEncryptApp {
                     Palette::BORDER
                 },
             ),
-            egui::StrokeKind::Middle,
+            egui::StrokeKind::Outside,
         );
 
         let input_rect =
