@@ -344,10 +344,10 @@ fn is_vx2_file(path: &Path) -> bool {
 }
 
 fn emit_json(result: &JsonResult) {
-    println!(
-        "{}",
-        serde_json::to_string(result).expect("Failed to serialize JSON result")
-    );
+    match serde_json::to_string(result) {
+        Ok(json) => println!("{json}"),
+        Err(e) => eprintln!("Error serializing JSON result: {e}"),
+    }
 }
 
 fn compute_sha256(path: &Path) -> Result<String, String> {

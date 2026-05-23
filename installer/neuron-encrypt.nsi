@@ -115,6 +115,18 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk"
   RMDir "$SMPROGRAMS\${PRODUCT_NAME}"
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+
+  # Improved uninstaller safety: only remove association if we own it
+  ReadRegDWORD $0 HKLM "Software\NeuronEncrypt" "FileAssocInstalled"
+  ${If} $0 == 1
+    ReadRegStr $1 HKCR ".vx2" ""
+    ${If} $1 == "${VX2_CLASS}"
+      DeleteRegKey HKCR ".vx2"
+      DeleteRegKey HKCR "${VX2_CLASS}"
+      System::Call 'shell32::SHChangeNotify(i 0x8000000, i 0, i 0, i 0)'
+    ${EndIf}
+  ${EndIf}
+
   DeleteRegKey HKLM "Software\NeuronEncrypt"
   DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"
   RMDir "$INSTDIR"

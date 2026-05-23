@@ -5,8 +5,8 @@ Description: The current Argon2id memory cost is set to 64MB (m_cost=65536). Sec
 Why not fixed: no-touch zone
 Suggested fix: Update Argon2id Params in derive_key and derive_key_v3 to use m_cost=262144.
 First detected: 2026-05-09
-Last attempted: 2026-05-09
-Attempt count: 1
+Last attempted: 2026-05-23
+Attempt count: 2
 ---
 [UNEXPECTED_PANICS] - Unhandled unwrap() calls in crypto-adjacent paths
 Severity: Medium
@@ -15,8 +15,8 @@ Description: Multiple uses of .unwrap() or .unwrap_or_else() on locks/IO results
 Why not fixed: no-touch zone
 Suggested fix: Replace .unwrap() with proper error handling using CryptoError or .expect() with descriptive panic messages.
 First detected: 2026-05-09
-Last attempted: 2026-05-09
-Attempt count: 1
+Last attempted: 2026-05-23
+Attempt count: 2
 ---
 [RUSTSEC-2024-0436] - Unmaintained dependency: paste
 Severity: Medium
@@ -25,6 +25,16 @@ Description: The `paste` crate is no longer maintained. While it's a macro-utili
 Why not fixed: no-touch zone (Cargo.lock modification restricted)
 Suggested fix: Replace `paste` with `pastey` or `with_builtin_macros`.
 First detected: 2026-05-09
-Last attempted: 2026-05-09
+Last attempted: 2026-05-23
+Attempt count: 2
+---
+[TMP_PATH_FALLBACK] - Unsafe fallback in tmp_path for paths without filenames
+Severity: Medium
+Location: neuron-encrypt/src/crypto.rs:274
+Description: In `tmp_path`, if the destination path lacks a filename (e.g., root or directory path), `unwrap_or_default()` returns an empty string. This results in a temporary filename like `.suffix.tmp`, which might be hidden on some systems or cause unexpected behavior.
+Why not fixed: no-touch zone
+Suggested fix: Provide a safe fallback filename like "output" or "file" when `file_name()` is None.
+First detected: 2026-05-23
+Last attempted: 2026-05-23
 Attempt count: 1
 ---
