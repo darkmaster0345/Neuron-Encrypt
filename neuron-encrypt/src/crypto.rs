@@ -776,8 +776,8 @@ pub fn secure_wipe(path: &Path) -> CryptoResult<()> {
     let len = metadata.len();
     let mut file = fs::OpenOptions::new().write(true).open(path)?;
 
+    let mut buffer = vec![0u8; 64 * 1024];
     for _ in 0..3 {
-        let mut buffer = vec![0u8; 64 * 1024];
         file.seek(std::io::SeekFrom::Start(0))?;
         let mut written = 0;
 
