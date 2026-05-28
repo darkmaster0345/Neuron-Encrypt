@@ -10,3 +10,6 @@ local.properties
 # IDE
 .idea/
 *.iml
+
+# Rust build artifacts
+neuron-encrypt-jni/target/
