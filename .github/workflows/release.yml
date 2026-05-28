@@ -23,6 +23,15 @@ jobs:
         with:
           toolchain: "1.88.0"
 
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            neuron-encrypt/target
+          key: ${{ runner.os }}-audit-cargo-${{ hashFiles('neuron-encrypt/Cargo.lock') }}
+
       - name: Install cargo-audit
         run: cargo +1.88.0 install cargo-audit --locked
 
@@ -66,12 +75,21 @@ jobs:
           targets: ${{ matrix.target == 'universal-apple-darwin' && 'x86_64-apple-darwin,aarch64-apple-darwin' || matrix.target }}
           components: rustfmt, clippy
 
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            neuron-encrypt/target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('neuron-encrypt/Cargo.lock') }}
+
       - name: Check Formatting
         run: cargo fmt --check
         working-directory: neuron-encrypt
 
       - name: Run Clippy
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
         working-directory: neuron-encrypt
 
       - name: Run Tests
@@ -82,7 +100,7 @@ jobs:
         working-directory: neuron-encrypt
 
       - name: Check Compilation
-        run: cargo check
+        run: cargo check --all-targets
         working-directory: neuron-encrypt
 
       - name: Build (Non-macOS)

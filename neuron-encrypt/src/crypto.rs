@@ -64,8 +64,40 @@ pub const MAX_ENCRYPTED_FILE_SIZE: u64 = MAX_FILE_SIZE + HEADER_LEN as u64 + TAG
 /// Minimum passphrase length for security.
 pub const MIN_PASSWORD_LEN: usize = 8;
 
+/// Receives best-effort progress updates from long-running crypto operations.
 pub trait ProgressReporter: Send + Sync {
     fn report(&self, progress: f32, message: &str);
+}
+
+fn source_file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| String::from("file"))
+}
+
+/// Return the default encrypted output file name for `path`.
+pub fn default_encrypt_output_name(path: &Path) -> String {
+    format!("{}{}", source_file_name(path), EXTENSION)
+}
+
+/// Return the default decrypted output file name for `path`.
+///
+/// The function strips exactly one trailing `.vx2` suffix case-insensitively.
+/// If that would produce an empty file name, it returns `decrypted` instead.
+pub fn default_decrypt_output_name(path: &Path) -> String {
+    let name = source_file_name(path);
+    if name.len() >= EXTENSION.len()
+        && name[name.len() - EXTENSION.len()..].eq_ignore_ascii_case(EXTENSION)
+    {
+        let stripped = &name[..name.len() - EXTENSION.len()];
+        if stripped.is_empty() {
+            String::from("decrypted")
+        } else {
+            stripped.to_owned()
+        }
+    } else {
+        name
+    }
 }
 
 /// A reporter that only forwards materially different updates.
@@ -93,8 +125,8 @@ impl<'a> ProgressReporter for ThrottledReporter<'a> {
         let last_progress = f32::from_bits(self.last_progress.load(Ordering::Relaxed));
 
         let (last_message, last_time) = {
-            let message_guard = self.last_message.lock().expect("Mutex was poisoned");
-            let time_guard = self.last_time.lock().expect("Mutex was poisoned");
+            let message_guard = self.last_message.lock().unwrap_or_else(|e| e.into_inner());
+            let time_guard = self.last_time.lock().unwrap_or_else(|e| e.into_inner());
             (message_guard.clone(), *time_guard)
         };
 
@@ -409,13 +441,13 @@ pub fn encrypt_file(
         out.write_all(&stream_nonce)?;
 
         // Stream encryption in 1 MB chunks
-        let mut buf = vec![0u8; CHUNK_SIZE];
+        let mut buf = Zeroizing::new(vec![0u8; CHUNK_SIZE]);
         let mut bytes_done: u64 = 0;
         let mut chunk_counter: u64 = 0;
         const IO_GOVENER_INTERVAL: u64 = 100; // ~100 MB between flushes
 
         loop {
-            let n = read_exact_or_eof(&mut file, &mut buf)?;
+            let n = read_exact_or_eof(&mut file, buf.as_mut_slice())?;
             if n == 0 {
                 // Empty file or exact chunk boundary — finalize with empty last
                 let ct = encryptor
@@ -454,7 +486,7 @@ pub fn encrypt_file(
                 chunk_counter += 1;
 
                 // I/O Governor: periodically flush dirty pages to prevent OS lag.
-                if chunk_counter.is_multiple_of(IO_GOVENER_INTERVAL) {
+                if chunk_counter % IO_GOVENER_INTERVAL == 0 {
                     out.sync_data()?;
                     std::thread::sleep(Duration::from_millis(5));
                 }
@@ -683,10 +715,10 @@ fn decrypt_file_streaming(
             if let Some(prev) = last_chunk.take() {
                 let frac = 0.10 + 0.85 * (bytes_done as f32 / encrypted_body as f32);
                 reporter.report(frac, "Decrypting...");
-                let pt = decryptor
+                let pt = Zeroizing::new(decryptor
                     .decrypt_next(prev.as_slice())
-                    .map_err(|_| CryptoError::DecryptionFailed)?;
-                out.write_all(&pt)?;
+                    .map_err(|_| CryptoError::DecryptionFailed)?);
+                out.write_all(pt.as_slice())?;
             }
 
             bytes_done += n as u64;
@@ -696,10 +728,10 @@ fn decrypt_file_streaming(
         // Process the final chunk
         if let Some(final_data) = last_chunk {
             reporter.report(0.95, "Decrypting final chunk...");
-            let pt = decryptor
+            let pt = Zeroizing::new(decryptor
                 .decrypt_last(final_data.as_slice())
-                .map_err(|_| CryptoError::DecryptionFailed)?;
-            out.write_all(&pt)?;
+                .map_err(|_| CryptoError::DecryptionFailed)?);
+            out.write_all(pt.as_slice())?;
         }
 
         out.sync_all()?;
@@ -819,13 +851,13 @@ pub fn encrypt_stream<R: Read + Seek, W: Write>(
     writer.write_all(&salt)?;
     writer.write_all(&stream_nonce)?;
 
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    let mut buf = Zeroizing::new(vec![0u8; CHUNK_SIZE]);
     let mut bytes_done: u64 = 0;
     let mut chunk_counter: u64 = 0;
     const IO_GOVERNOR_INTERVAL: u64 = 100;
 
     loop {
-        let n = read_exact_or_eof(reader, &mut buf)?;
+        let n = read_exact_or_eof(reader, buf.as_mut_slice())?;
         if n == 0 {
             let ct = encryptor
                 .encrypt_last(&[][..])
@@ -863,7 +895,7 @@ pub fn encrypt_stream<R: Read + Seek, W: Write>(
             writer.write_all(&ct)?;
             chunk_counter += 1;
 
-            if chunk_counter.is_multiple_of(IO_GOVERNOR_INTERVAL) {
+            if chunk_counter % IO_GOVERNOR_INTERVAL == 0 {
                 writer.flush()?;
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -891,7 +923,12 @@ pub fn decrypt_stream<R: Read, W: Write>(
     }
 
     let mut magic = [0u8; 8];
-    reader.read_exact(&mut magic)?;
+    reader
+        .read_exact(&mut magic)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::UnexpectedEof => CryptoError::FileTooSmall,
+            _ => CryptoError::Io(error),
+        })?;
 
     if &magic == MAGIC_V3 {
         decrypt_stream_v3(reader, writer, password, total_size, reporter)
@@ -941,10 +978,10 @@ fn decrypt_stream_v3<R: Read, W: Write>(
                 0.50
             };
             reporter.report(frac, "Decrypting...");
-            let pt = decryptor
+            let pt = Zeroizing::new(decryptor
                 .decrypt_next(prev.as_slice())
-                .map_err(|_| CryptoError::DecryptionFailed)?;
-            writer.write_all(&pt)?;
+                .map_err(|_| CryptoError::DecryptionFailed)?);
+            writer.write_all(pt.as_slice())?;
         }
 
         bytes_done += n as u64;
@@ -953,10 +990,12 @@ fn decrypt_stream_v3<R: Read, W: Write>(
 
     if let Some(final_data) = last_chunk {
         reporter.report(0.95, "Decrypting final chunk...");
-        let pt = decryptor
+        let pt = Zeroizing::new(decryptor
             .decrypt_last(final_data.as_slice())
-            .map_err(|_| CryptoError::DecryptionFailed)?;
-        writer.write_all(&pt)?;
+            .map_err(|_| CryptoError::DecryptionFailed)?);
+        writer.write_all(pt.as_slice())?;
+    } else {
+        return Err(CryptoError::FileTooSmall);
     }
 
     writer.flush()?;
@@ -991,7 +1030,7 @@ fn decrypt_stream_v2<R: Read, W: Write>(
 
     let aad = build_aad(&salt, &nonce);
     reporter.report(0.50, "Decrypting data (AES-256-GCM-SIV)...");
-    let plaintext = cipher
+    let plaintext = Zeroizing::new(cipher
         .decrypt(
             Nonce::from_slice(&nonce),
             Payload {
@@ -999,8 +1038,8 @@ fn decrypt_stream_v2<R: Read, W: Write>(
                 aad: &aad,
             },
         )
-        .map_err(|_| CryptoError::DecryptionFailed)?;
-    writer.write_all(&plaintext)?;
+        .map_err(|_| CryptoError::DecryptionFailed)?);
+    writer.write_all(plaintext.as_slice())?;
 
     writer.flush()?;
     reporter.report(1.00, "Decryption complete.");
@@ -1081,6 +1120,23 @@ mod tests {
         raw[0..8].copy_from_slice(b"NOTMAGIC");
         let result = parse_header(&raw);
         assert!(matches!(result, Err(CryptoError::InvalidMagic)));
+    }
+
+    #[test]
+    fn test_default_output_names_strip_one_vx2_suffix() {
+        assert_eq!(
+            default_encrypt_output_name(Path::new("report.pdf")),
+            "report.pdf.vx2"
+        );
+        assert_eq!(
+            default_decrypt_output_name(Path::new("report.pdf.vx2")),
+            "report.pdf"
+        );
+        assert_eq!(
+            default_decrypt_output_name(Path::new("archive.vx2.vx2")),
+            "archive.vx2"
+        );
+        assert_eq!(default_decrypt_output_name(Path::new(".vx2")), "decrypted");
     }
 
     #[test]
@@ -1258,6 +1314,23 @@ mod tests {
         assert!(result.is_err());
 
         let _ = fs::remove_dir_all(tmp_dir);
+    }
+
+    #[test]
+    fn test_v3_stream_decrypt_rejects_header_only_input() {
+        let password = "x".repeat(MIN_PASSWORD_LEN + 4);
+        let reporter = TestReporter;
+        let mut input = Vec::new();
+        input.extend_from_slice(MAGIC_V3);
+        input.extend_from_slice(&[0u8; SALT_V3_LEN]);
+        input.extend_from_slice(&[0u8; STREAM_NONCE_LEN]);
+
+        let mut reader = std::io::Cursor::new(input);
+        let mut output = Vec::new();
+        let result = decrypt_stream(&mut reader, &mut output, password.as_bytes(), None, &reporter);
+
+        assert!(matches!(result, Err(CryptoError::FileTooSmall)));
+        assert!(output.is_empty());
     }
 
     #[test]

@@ -169,28 +169,17 @@ fn is_vx2_file(path: &Path) -> bool {
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
     let (ab, bb) = (a.as_bytes(), b.as_bytes());
-
-    let len_a = ab.len();
-    let len_b = bb.len();
-    let max_len = len_a.max(len_b);
-
-    let mut byte_comparison_result = 0;
+    let max_len = ab.len().max(bb.len());
+    let mut acc: u8 = 0;
 
     for i in 0..max_len {
-        let byte_a = ab.get(i).unwrap_or(&0);
-        let byte_b = bb.get(i).unwrap_or(&0);
-        byte_comparison_result |= byte_a ^ byte_b;
+        let av = ab.get(i).copied().unwrap_or(0);
+        let bv = bb.get(i).copied().unwrap_or(0);
+        acc |= av ^ bv;
     }
 
-    let len_diff = len_a ^ len_b;
-    // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
-    let len_mismatch_flag = (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
-
-    // Combine byte comparison result with length mismatch flag
-    // If either bytes don't match OR lengths don't match, final_result will be non-zero
-    let final_result = byte_comparison_result | len_mismatch_flag;
-
-    final_result == 0
+    acc |= (ab.len() ^ bb.len()).min(0xff) as u8;
+    acc == 0
 }
 
 fn truncate_chars(s: &str, n: usize) -> String {
@@ -282,17 +271,9 @@ fn eval_strength(password: &str) -> (Strength, f32, &'static str) {
 }
 
 fn preview_output_name(mode: Mode, path: &Path) -> String {
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| String::from("file"));
     match mode {
-        Mode::Encrypt => format!("{}{}", name, crypto::EXTENSION),
-        Mode::Decrypt => {
-            name.strip_suffix(crypto::EXTENSION)
-                .map(|s| s.to_owned())
-                .unwrap_or(name)
-        }
+        Mode::Encrypt => crypto::default_encrypt_output_name(path),
+        Mode::Decrypt => crypto::default_decrypt_output_name(path),
     }
 }
 
@@ -447,14 +428,6 @@ impl NeuronEncryptApp {
         }
     }
 
-    #[allow(dead_code)]
-    fn action_label(&self) -> &'static str {
-        match self.mode {
-            Mode::Encrypt => "Encrypt file",
-            Mode::Decrypt => "Decrypt file",
-        }
-    }
-
     fn execute(&mut self, ctx: &egui::Context) {
         let Some(file_path) = self.selected_file.clone() else {
             return;
@@ -510,6 +483,9 @@ impl NeuronEncryptApp {
         let password = self.password.clone();
         let mode = self.mode;
         let ctx_clone = ctx.clone();
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.show_password = false;
 
         std::thread::spawn(move || {
             let reporter = MpscReporter { tx: tx.clone() };
@@ -594,6 +570,9 @@ impl NeuronEncryptApp {
         let files = self.batch_files.clone();
         let ctx_clone = ctx.clone();
         let cancel = self.cancel_flag.clone();
+        self.password = Zeroizing::new(String::new());
+        self.confirm_password = Zeroizing::new(String::new());
+        self.show_password = false;
 
         std::thread::spawn(move || {
             let total = files.len();
@@ -1273,7 +1252,7 @@ impl NeuronEncryptApp {
         let is_vx2 = self.selected_file.as_ref().is_some_and(|p| is_vx2_file(p));
 
         if is_vx2 {
-            let decrypt_disabled = self.password.is_empty();
+            let decrypt_disabled = self.password.chars().count() < crypto::MIN_PASSWORD_LEN;
             if self
                 .draw_button(
                     ui,

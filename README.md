@@ -506,9 +506,26 @@ The GUI thread never handles crypto. All encryption/decryption runs in a backgro
 
 ---
 
+## Android Version
+
+Neuron Encrypt is also available as a native Android application. It packages the core Rust cryptographic engine via JNI to guarantee the same speed and safety profile on mobile.
+
+- **Offline-First Security**: Zero network permissions requested.
+- **Modern SAF API**: Works natively via Android Storage Access Framework without asking for system-wide files storage permission.
+- **Material3 Custom Dark Theme**: Near-black design with active passphrase feedback, matching the desktop experience.
+
+For full setup, JNI architecture details, and building instructions, see the [Android README](android/README.md).
+
+---
+
 ## Project Structure
 
 ```
+├── android/             — Native Android app & JNI shared library
+│   ├── app/             — Kotlin/Compose Android app
+│   ├── neuron-encrypt-jni/ — Rust JNI wrapper crate
+│   ├── build-rust.sh    — Cross-compiles JNI targets
+│   └── README.md        — Android build & architecture details
 ├── neuron-encrypt/
 │   ├── src/
 │   │   ├── main.rs      — entry point, window + theme setup
@@ -531,10 +548,65 @@ The GUI thread never handles crypto. All encryption/decryption runs in a backgro
 │   ├── neuron-encrypt.nsi  — NSIS installer script
 │   └── README.md           — installer build instructions
 ├── .github/workflows/
-│   └── release.yml         — CI/CD pipeline
+│   ├── release.yml         — CI/CD pipeline
+│   └── android.yml         — Android CI pipeline
 ├── LICENSE              — GPLv3
 └── README.md            — this file
 ```
+
+---
+
+## Security
+
+### Cipher Suite
+
+| Layer | Algorithm | Parameters |
+|-------|-----------|------------|
+| Encryption (V3) | XChaCha20-Poly1305 (streaming AEAD) | 192-bit nonce, 128-bit tag, 1 MB chunks |
+| Encryption (V2 legacy) | AES-256-GCM-SIV | 96-bit nonce, 128-bit tag |
+| Key Derivation | Argon2id | m=65536 (64 MB), t=3 iterations, p=1 lane |
+| Key Expansion | HKDF-SHA512 | Two separate 256-bit subkeys: enc + nonce |
+| Integrity | Poly1305 / GHASH | Per-chunk authentication; any bit-flip fails |
+| RNG | OS CSPRNG (`OsRng`) | `getrandom` crate; no `rand` global state |
+
+### Key Derivation Details
+
+```
+passphrase + 32-byte OsRng salt
+       │
+    Argon2id (64 MB, 3 passes)
+       │
+    64-byte master key
+       ├─ HKDF-Extract+Expand → 32-byte encryption key
+       └─ HKDF-Extract+Expand → 32-byte nonce seed
+```
+
+The salt is stored in plaintext in the file header. The master key and all intermediate key material are stored in `Zeroizing<Vec<u8>>` which zeroes memory on drop.
+
+### Threat Model
+
+**Protected against:**
+- Offline brute-force: Argon2id with 64 MB memory cost makes GPU attacks expensive.
+- Ciphertext tampering: Every 1 MB chunk has an independent Poly1305 authentication tag. Corruption of any byte fails decryption of that chunk.
+- Nonce reuse: Each encryption generates a fresh 24-byte random nonce via `OsRng`. With 192-bit nonces, collision probability is negligible even at billions of files.
+- Sensitive data in memory: Plaintext buffers and keys are wrapped in `Zeroizing<>`, zeroed on drop. Passwords are cleared from UI state immediately after the crypto thread starts.
+
+**Not protected against:**
+- Adversaries with access to RAM (cold-boot, DMA attacks) — no in-memory encryption.
+- Keyloggers or malicious screen readers capturing the passphrase during input.
+- Weak passphrases: The strength meter is advisory only. A passphrase scoring "Weak" can still be used.
+- SSD wear-levelling: The source wipe function cannot guarantee physical erasure on flash storage, CoW filesystems (Btrfs, APFS, ZFS), or NTFS volumes with shadow copies enabled.
+- Metadata: File names, sizes, and access timestamps of the original file are not encrypted.
+
+### Passphrase Requirements
+
+- Minimum 8 characters enforced at the API level (`MIN_PASSWORD_LEN`).
+- The UI strength meter scores: length ≥ 8/12/16, uppercase, digit, symbol presence.
+- No maximum length — passphrases are hashed through Argon2id regardless of length.
+
+### Reporting Vulnerabilities
+
+Do **not** open a public GitHub issue for security vulnerabilities. Use the [GitHub Security Advisory](https://github.com/darkmaster0345/Neuron-Encrypt/security/advisories) to report privately.
 
 ---
 

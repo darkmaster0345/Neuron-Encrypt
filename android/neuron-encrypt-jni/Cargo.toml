@@ -1,0 +1,20 @@
+[package]
+name = "neuron-encrypt-jni"
+version = "2.0.0"
+edition = "2021"
+
+[lib]
+name = "neuron_encrypt_jni"
+crate-type = ["cdylib"]
+
+[dependencies]
+neuron-encrypt = { path = "../../neuron-encrypt", default-features = false }
+jni = { version = "0.21", default-features = false }
+zeroize = "1.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

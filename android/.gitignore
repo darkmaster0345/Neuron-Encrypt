@@ -1,0 +1,12 @@
+# JNI .so files built by build-rust.sh
+app/src/main/jniLibs/
+
+# Gradle build outputs
+.gradle/
+build/
+app/build/
+local.properties
+
+# IDE
+.idea/
+*.iml

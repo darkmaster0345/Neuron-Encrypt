@@ -198,18 +198,18 @@ impl IndProgress {
             ProgressStyle::with_template(
                 "[{bar:10.cyan/blue}] {percent}% | {msg} | {bytes:>7}/{total_bytes:7} | {bytes_per_sec} | ETA {eta}",
             )
-            .expect("Invalid progress bar template")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
             .with_key("bytes_per_sec", |state: &ProgressState, w: &mut dyn std::fmt::Write| {
-                write!(w, "{}/s", HumanBytes(state.pos())).expect("Failed to format bytes per second");
+                let _ = write!(w, "{}/s", HumanBytes(state.pos()));
             })
             .progress_chars("##-")
         } else {
             ProgressStyle::with_template("{spinner} | {msg} | {bytes} | {bytes_per_sec}")
-                .expect("Invalid progress bar spinner template")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner())
                 .with_key(
                     "bytes_per_sec",
                     |state: &ProgressState, w: &mut dyn std::fmt::Write| {
-                        write!(w, "{}/s", HumanBytes(state.pos())).expect("Failed to format bytes per second");
+                        let _ = write!(w, "{}/s", HumanBytes(state.pos()));
                     },
                 )
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
@@ -296,22 +296,66 @@ fn resolve_output(input_path: &Path, mode: &str, output_arg: &Option<String>) ->
 
     match mode {
         "encrypt" => {
-            let name = input_path
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "output".to_owned());
             input_path
                 .parent()
                 .unwrap_or(Path::new("."))
-                .join(format!("{name}.vx2"))
+                .join(crypto::default_encrypt_output_name(input_path))
         }
         "decrypt" => {
-            let stem = input_path.file_stem().unwrap_or_default().to_string_lossy();
-            let stem = stem.strip_suffix(".vx2").unwrap_or(&stem);
-            input_path.parent().unwrap_or(Path::new(".")).join(stem)
+            input_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(crypto::default_decrypt_output_name(input_path))
         }
         _ => input_path.to_path_buf(),
     }
+}
+
+#[cfg(target_os = "windows")]
+fn same_path(a: &Path, b: &Path) -> bool {
+    a.to_string_lossy()
+        .eq_ignore_ascii_case(&b.to_string_lossy())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn same_path(a: &Path, b: &Path) -> bool {
+    a == b
+}
+
+fn remove_existing_output_if_forced(
+    input_path: &Path,
+    output_path: &Path,
+    force: bool,
+) -> Result<(), (ExitCode, String)> {
+    if !force || !output_path.exists() {
+        return Ok(());
+    }
+
+    let input = fs::canonicalize(input_path)
+        .map_err(|e| (ExitCode::BadInput, format!("Cannot resolve input path: {e}")))?;
+    let output = fs::canonicalize(output_path)
+        .map_err(|e| (ExitCode::BadInput, format!("Cannot resolve output path: {e}")))?;
+
+    if same_path(&input, &output) {
+        return Err((
+            ExitCode::BadInput,
+            "Refusing to overwrite the input file in place.".to_owned(),
+        ));
+    }
+
+    if output_path.is_dir() {
+        return Err((
+            ExitCode::BadInput,
+            format!("Output path is a directory: {}", output_path.display()),
+        ));
+    }
+
+    fs::remove_file(output_path).map_err(|e| {
+        (
+            ExitCode::RuntimeError,
+            format!("Cannot remove existing output file: {e}"),
+        )
+    })
 }
 
 fn check_output_exists(path: &Path, force: bool, json: bool) -> Result<(), ExitCode> {
@@ -346,7 +390,7 @@ fn is_vx2_file(path: &Path) -> bool {
 fn emit_json(result: &JsonResult) {
     match serde_json::to_string(result) {
         Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("Error serializing JSON result: {e}"),
+        Err(error) => eprintln!("Error: failed to serialize JSON output: {error}"),
     }
 }
 
@@ -394,7 +438,7 @@ fn run() -> Result<(), ExitCode> {
         _ => read_password(&cli.password_file),
     };
 
-    if mode == "encrypt" && password.len() < crypto::MIN_PASSWORD_LEN {
+    if password.len() < crypto::MIN_PASSWORD_LEN {
         let msg = format!(
             "Passphrase too short (minimum {} characters).",
             crypto::MIN_PASSWORD_LEN
@@ -455,6 +499,22 @@ fn run() -> Result<(), ExitCode> {
         let output_path = resolve_output(&input_path, mode, &output_str);
 
         check_output_exists(&output_path, cli.force, cli.json)?;
+        if let Err((code, msg)) =
+            remove_existing_output_if_forced(&input_path, &output_path, cli.force)
+        {
+            if cli.json {
+                emit_json(&JsonResult {
+                    status: "error".into(),
+                    output_path: Some(output_path.display().to_string()),
+                    bytes_processed: None,
+                    duration_ms: start.elapsed().as_millis(),
+                    sha256: None,
+                    error: Some(msg.clone()),
+                });
+            }
+            eprintln!("Error: {msg}");
+            return Err(code);
+        }
 
         if !cli.quiet && !cli.json {
             let action = if mode == "encrypt" {
