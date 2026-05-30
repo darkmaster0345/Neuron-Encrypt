@@ -106,7 +106,10 @@ fn map_error(env: &mut JNIEnv, err: CryptoError) -> jint {
         CryptoError::Io(_) => (1, "Storage I/O failed.".to_owned()),
         CryptoError::Argon2Failed(_)
         | CryptoError::HkdfFailed(_)
-        | CryptoError::EncryptionFailed(_) => (1, "Cryptographic operation failed.".to_owned()),
+        | CryptoError::EncryptionFailed(_)
+        | CryptoError::InvalidSaltLength { .. }
+        | CryptoError::InvalidNonceLength { .. }
+        | CryptoError::LegacyFileTooLarge => (1, "Cryptographic operation failed.".to_owned()),
     };
 
     let _ = env.throw_new(EXCEPTION_CLASS, message);
@@ -174,10 +177,15 @@ fn native_encrypt_impl(
     let input_file = unsafe { File::from_raw_fd(input_fd as RawFd) };
     let mut output_file = unsafe { File::from_raw_fd(output_fd as RawFd) };
 
+    let vm2 = match env.get_java_vm() {
+        Ok(v) => v,
+        Err(_) => return fail_with_exception(env, password, 1, "Failed to access JVM."),
+    };
+
     let mut reader = CancelableReader {
         inner: input_file,
         cancel: cancel_ref,
-        vm: vm.clone(),
+        vm: vm2,
     };
 
     let reporter = JniReporter {
@@ -249,10 +257,15 @@ fn native_decrypt_impl(
     let input_file = unsafe { File::from_raw_fd(input_fd as RawFd) };
     let mut output_file = unsafe { File::from_raw_fd(output_fd as RawFd) };
 
+    let vm2 = match env.get_java_vm() {
+        Ok(v) => v,
+        Err(_) => return fail_with_exception(env, password, 1, "Failed to access JVM."),
+    };
+
     let mut reader = CancelableReader {
         inner: input_file,
         cancel: cancel_ref,
-        vm: vm.clone(),
+        vm: vm2,
     };
 
     let reporter = JniReporter {
