@@ -21,9 +21,9 @@ use zeroize::Zeroizing;
 fn compute_sha256(path: &Path) -> Option<String> {
     let mut file = fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
+    let mut buf = Zeroizing::new([0u8; 65536]);
     loop {
-        let n = file.read(&mut buf).ok()?;
+        let n = file.read(buf.as_mut_slice()).ok()?;
         if n == 0 {
             break;
         }
