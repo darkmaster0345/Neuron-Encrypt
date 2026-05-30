@@ -49,8 +49,7 @@ class MainActivity : ComponentActivity() {
                     composable("home") {
                         HomeScreen(
                             onEncryptDecrypt = { navController.navigate("single") },
-                            onBatch = { navController.navigate("batch") },
-                            onAbout = {}
+                            onBatch = { navController.navigate("batch") }
                         )
                     }
 
