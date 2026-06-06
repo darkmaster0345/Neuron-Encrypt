@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, Read, Seek};
 use std::os::fd::{FromRawFd, RawFd};
 use std::panic::{self, AssertUnwindSafe};
+use std::sync::Arc;
 
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject};
@@ -20,7 +21,7 @@ const CANCELLED_IO_MESSAGE: &str = "operation cancelled";
 struct CancelableReader {
     inner: File,
     cancel: GlobalRef,
-    vm: JavaVM,
+    vm: Arc<JavaVM>,
 }
 
 impl CancelableReader {
@@ -62,7 +63,7 @@ impl Seek for CancelableReader {
 
 struct JniReporter {
     listener: GlobalRef,
-    vm: JavaVM,
+    vm: Arc<JavaVM>,
 }
 
 impl ProgressReporter for JniReporter {
@@ -101,9 +102,14 @@ fn map_error(env: &mut JNIEnv, err: CryptoError) -> jint {
         | CryptoError::InvalidDestination(_)
         | CryptoError::SourceAndDestinationSame(_)
         | CryptoError::NotAFile(_)
+        | CryptoError::InvalidSaltLength { .. }
+        | CryptoError::InvalidNonceLength { .. }
         | CryptoError::FileTooLarge { .. } => (2, "Invalid input or output file.".to_owned()),
 
         CryptoError::Io(_) => (1, "Storage I/O failed.".to_owned()),
+        CryptoError::LegacyFileTooLarge => {
+            (1, "Legacy file too large for this operation.".to_owned())
+        }
         CryptoError::Argon2Failed(_)
         | CryptoError::HkdfFailed(_)
         | CryptoError::EncryptionFailed(_) => (1, "Cryptographic operation failed.".to_owned()),
@@ -174,15 +180,16 @@ fn native_encrypt_impl(
     let input_file = unsafe { File::from_raw_fd(input_fd as RawFd) };
     let mut output_file = unsafe { File::from_raw_fd(output_fd as RawFd) };
 
+    let vm = Arc::new(vm);
     let mut reader = CancelableReader {
         inner: input_file,
         cancel: cancel_ref,
-        vm: vm.clone(),
+        vm: Arc::clone(&vm),
     };
 
     let reporter = JniReporter {
         listener: listener_ref,
-        vm,
+        vm: Arc::clone(&vm),
     };
     let throttled = ThrottledReporter::new(&reporter);
 
@@ -249,15 +256,16 @@ fn native_decrypt_impl(
     let input_file = unsafe { File::from_raw_fd(input_fd as RawFd) };
     let mut output_file = unsafe { File::from_raw_fd(output_fd as RawFd) };
 
+    let vm = Arc::new(vm);
     let mut reader = CancelableReader {
         inner: input_file,
         cancel: cancel_ref,
-        vm: vm.clone(),
+        vm: Arc::clone(&vm),
     };
 
     let reporter = JniReporter {
         listener: listener_ref,
-        vm,
+        vm: Arc::clone(&vm),
     };
     let throttled = ThrottledReporter::new(&reporter);
 
