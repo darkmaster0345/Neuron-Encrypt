@@ -16,7 +16,8 @@ import com.neuronencrypt.app.ui.theme.*
 @Composable
 fun HomeScreen(
     onEncryptDecrypt: () -> Unit,
-    onBatch: () -> Unit
+    onBatch: () -> Unit,
+    onAbout: () -> Unit
 ) {
     var showAbout by remember { mutableStateOf(false) }
 
@@ -104,7 +105,10 @@ fun HomeScreen(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        TextButton(onClick = { showAbout = true }) {
+        TextButton(onClick = {
+            onAbout()
+            showAbout = true
+        }) {
             Text(
                 text = "About",
                 style = MaterialTheme.typography.bodySmall,

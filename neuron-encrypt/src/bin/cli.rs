@@ -107,11 +107,17 @@ enum Command {
 
 fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
     if let Some(path) = password_file {
-        let pw = fs::read_to_string(path).unwrap_or_else(|e| {
+        let bytes = fs::read(path).unwrap_or_else(|e| {
             eprintln!("Error: Cannot read password file: {e}");
             std::process::exit(ExitCode::BadInput as i32);
         });
-        return Zeroizing::new(pw.trim_end_matches(&['\r', '\n'][..]).to_owned());
+        let mut pw = Zeroizing::new(String::from_utf8(bytes).unwrap_or_else(|e| {
+            eprintln!("Error: Password file contains invalid UTF-8: {e}");
+            std::process::exit(ExitCode::BadInput as i32);
+        }));
+        let trimmed_len = pw.trim_end_matches(&['\r', '\n'][..]).len();
+        pw.truncate(trimmed_len);
+        return pw;
     }
 
     if let Ok(pw) = std::env::var("NEURON_PASSWORD") {
@@ -397,9 +403,9 @@ fn emit_json(result: &JsonResult) {
 fn compute_sha256(path: &Path) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
-    let mut buf = [0u8; 65536];
+    let mut buf = Zeroizing::new([0u8; 65536]);
     loop {
-        let n = file.read(&mut buf).map_err(|e| e.to_string())?;
+        let n = file.read(&mut *buf).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
         }
