@@ -14,6 +14,7 @@ use eframe::egui::{
 };
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
 use neuron_encrypt_core::error::CryptoError;
+use neuron_encrypt_core::utils::{constant_time_eq, format_size, is_vx2_file};
 use rand_core::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -160,27 +161,6 @@ pub struct NeuronEncryptApp {
     cancel_flag: Arc<AtomicBool>,
 }
 
-fn is_vx2_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.eq_ignore_ascii_case("vx2"))
-        .unwrap_or(false)
-}
-
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    let (ab, bb) = (a.as_bytes(), b.as_bytes());
-    let max_len = ab.len().max(bb.len());
-    let mut acc: u8 = 0;
-
-    for i in 0..max_len {
-        let av = ab.get(i).copied().unwrap_or(0);
-        let bv = bb.get(i).copied().unwrap_or(0);
-        acc |= av ^ bv;
-    }
-
-    acc |= (ab.len() ^ bb.len()).min(0xff) as u8;
-    acc == 0
-}
 
 fn truncate_chars(s: &str, n: usize) -> String {
     let mut out = s.chars().take(n).collect::<String>();
@@ -194,17 +174,6 @@ fn sanitize_text(s: &str) -> String {
     s.trim().to_owned()
 }
 
-fn format_size(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{bytes} B")
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / 1024.0 / 1024.0)
-    } else {
-        format!("{:.1} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
-    }
-}
 
 fn strength_color(strength: Strength) -> Color32 {
     match strength {
@@ -441,7 +410,7 @@ impl NeuronEncryptApp {
             return;
         }
 
-        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
+        if self.mode == Mode::Encrypt && !constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes()) {
             self.status = Some("Passphrases do not match.".to_owned());
             return;
         }
@@ -535,7 +504,7 @@ impl NeuronEncryptApp {
             ));
             return;
         }
-        if self.mode == Mode::Encrypt && !constant_time_eq(&self.password, &self.confirm_password) {
+        if self.mode == Mode::Encrypt && !constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes()) {
             self.status = Some("Passphrases do not match.".to_owned());
             return;
         }
@@ -1178,7 +1147,7 @@ impl NeuronEncryptApp {
 
             if !self.password.is_empty()
                 && !self.confirm_password.is_empty()
-                && !constant_time_eq(&self.password, &self.confirm_password)
+                && !constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes())
             {
                 ui.add_space(8.0);
                 self.draw_notice(
@@ -1239,7 +1208,7 @@ impl NeuronEncryptApp {
         let mismatch = self.mode == Mode::Encrypt
             && !self.password.is_empty()
             && !self.confirm_password.is_empty()
-            && !constant_time_eq(&self.password, &self.confirm_password);
+            && !constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes());
         let disabled = self.password.chars().count() < crypto::MIN_PASSWORD_LEN
             || mismatch
             || (self.mode == Mode::Encrypt
@@ -1558,7 +1527,7 @@ impl NeuronEncryptApp {
 
             if !self.password.is_empty()
                 && !self.confirm_password.is_empty()
-                && !constant_time_eq(&self.password, &self.confirm_password)
+                && !constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes())
             {
                 ui.add_space(8.0);
                 self.draw_notice(
@@ -1578,7 +1547,7 @@ impl NeuronEncryptApp {
         ui.add_space(20.0);
         let mut enabled = self.password.chars().count() >= crypto::MIN_PASSWORD_LEN;
         if self.mode == Mode::Encrypt {
-            enabled &= constant_time_eq(&self.password, &self.confirm_password);
+            enabled &= constant_time_eq(self.password.as_bytes(), self.confirm_password.as_bytes());
         }
 
         if let Some(msg) = &self.status {
