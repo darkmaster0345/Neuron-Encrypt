@@ -105,19 +105,17 @@ enum Command {
     },
 }
 
-fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
+fn read_password(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, (ExitCode, String)> {
     if let Some(path) = password_file {
-        let bytes = fs::read(path).unwrap_or_else(|e| {
-            eprintln!("Error: Cannot read password file: {e}");
-            std::process::exit(ExitCode::BadInput as i32);
-        });
-        let mut pw = Zeroizing::new(String::from_utf8(bytes).unwrap_or_else(|e| {
-            eprintln!("Error: Password file contains invalid UTF-8: {e}");
-            std::process::exit(ExitCode::BadInput as i32);
-        }));
+        let bytes = fs::read(path).map_err(|e| {
+            (ExitCode::BadInput, format!("Cannot read password file: {e}"))
+        })?;
+        let mut pw = Zeroizing::new(String::from_utf8(bytes).map_err(|e| {
+            (ExitCode::BadInput, format!("Password file contains invalid UTF-8: {e}"))
+        })?);
         let trimmed_len = pw.trim_end_matches(&['\r', '\n'][..]).len();
         pw.truncate(trimmed_len);
-        return pw;
+        return Ok(pw);
     }
 
     if let Ok(pw) = std::env::var("NEURON_PASSWORD") {
@@ -127,7 +125,7 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
         eprintln!(
             "[WARN] Prefer --password-file with a 0600-permission file for sensitive use."
         );
-        return Zeroizing::new(pw);
+        return Ok(Zeroizing::new(pw));
     }
 
     loop {
@@ -137,11 +135,10 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
                     eprintln!("Error: Passphrase cannot be empty.");
                     continue;
                 }
-                return Zeroizing::new(pw);
+                return Ok(Zeroizing::new(pw));
             }
             Err(e) => {
-                eprintln!("Error reading passphrase: {e}");
-                std::process::exit(ExitCode::BadInput as i32);
+                return Err((ExitCode::BadInput, format!("Error reading passphrase: {e}")));
             }
         }
     }
@@ -171,8 +168,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     final_result == 0
 }
 
-fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, String> {
-    let pass1 = read_password(password_file);
+fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, (ExitCode, String)> {
+    let pass1 = read_password(password_file)?;
     let pass2 = loop {
         match rpassword::prompt_password("Confirm passphrase: ") {
             Ok(pw) => {
@@ -182,11 +179,11 @@ fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<
                 }
                 break Zeroizing::new(pw);
             }
-            Err(e) => return Err(format!("Error reading passphrase: {e}")),
+            Err(e) => return Err((ExitCode::BadInput, format!("Error reading passphrase: {e}"))),
         }
     };
     if !constant_time_eq(pass1.as_bytes(), pass2.as_bytes()) {
-        return Err("Passphrases do not match".to_owned());
+        return Err((ExitCode::BadInput, "Passphrases do not match".to_owned()));
     }
     Ok(pass1)
 }
@@ -435,13 +432,29 @@ fn run() -> Result<(), ExitCode> {
         {
             match read_password_confirmed(&cli.password_file) {
                 Ok(password) => password,
-                Err(msg) => {
+                Err((code, msg)) => {
                     eprintln!("Error: {msg}");
-                    return Err(ExitCode::BadInput);
+                    return Err(code);
                 }
             }
         }
-        _ => read_password(&cli.password_file),
+        _ => match read_password(&cli.password_file) {
+            Ok(password) => password,
+            Err((code, msg)) => {
+                if cli.json {
+                    emit_json(&JsonResult {
+                        status: "error".into(),
+                        output_path: None,
+                        bytes_processed: None,
+                        duration_ms: start.elapsed().as_millis(),
+                        sha256: None,
+                        error: Some(msg.clone()),
+                    });
+                }
+                eprintln!("Error: {msg}");
+                return Err(code);
+            }
+        }
     };
 
     if password.len() < crypto::MIN_PASSWORD_LEN {
