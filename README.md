@@ -103,7 +103,7 @@ Streaming:
 
 - **Magic**: Literal `b"VAULTX03"` — identifies the streaming format version
 - **Salt**: 128-bit fresh `OsRng`-generated per file
-- **Nonce**: 56-bit fresh `OsRng`-generated per file; `EncryptorBE32` appends an internal 5-byte counter/flag (12 bytes total internally)
+- **Nonce**: 56-bit (7 bytes) fresh `OsRng`-generated per file; `EncryptorBE32` expands this to a 12-byte nonce internally by appending a 5-byte counter + 1-byte flag
 - **Body**: Sequence of AES-256-GCM-SIV encrypted chunks. Intermediate chunks via `encrypt_next`, final chunk via `encrypt_last` to prevent truncation attacks.
 
 ### Legacy VAULTX02 Format
@@ -562,23 +562,34 @@ For full setup, JNI architecture details, and building instructions, see the [An
 
 | Layer | Algorithm | Parameters |
 |-------|-----------|------------|
-| Encryption (V3) | XChaCha20-Poly1305 (streaming AEAD) | 192-bit nonce, 128-bit tag, 1 MB chunks |
-| Encryption (V2 legacy) | AES-256-GCM-SIV | 96-bit nonce, 128-bit tag |
-| Key Derivation | Argon2id | m=65536 (64 MB), t=3 iterations, p=1 lane |
+| Encryption (V3) | AES-256-GCM-SIV (BE32 streaming) | 56-bit stream nonce per file, 128-bit auth tag per 1 MB chunk |
+| Encryption (V2 legacy) | AES-256-GCM-SIV | 96-bit nonce, 128-bit auth tag |
+| Key Derivation | Argon2id | m=65536 (64 MB), t=3 iterations, p=4 lanes |
 | Key Expansion | HKDF-SHA512 | Two separate 256-bit subkeys: enc + nonce |
-| Integrity | Poly1305 / GHASH | Per-chunk authentication; any bit-flip fails |
+| Integrity | GHASH (GCM-SIV) | Per-chunk authentication; any bit-flip fails |
 | RNG | OS CSPRNG (`OsRng`) | `getrandom` crate; no `rand` global state |
+| Memory Hygiene | `Zeroizing<T>` | Key material zeroed from RAM on drop |
 
 ### Key Derivation Details
 
 ```
-passphrase + 32-byte OsRng salt
-       │
-    Argon2id (64 MB, 3 passes)
-       │
-    64-byte master key
-       ├─ HKDF-Extract+Expand → 32-byte encryption key
-       └─ HKDF-Extract+Expand → 32-byte nonce seed
+V3 (VAULTX03 streaming):
+  passphrase + 16-byte OsRng salt
+         │
+      Argon2id (64 MB, 3 passes, 4 lanes)
+         │
+      64-byte master key
+         ├─ HKDF-Extract+Expand → 32-byte encryption key
+         └─ HKDF-Extract+Expand → 32-byte nonce seed
+
+V2 (VAULTX02 legacy):
+  passphrase + 32-byte OsRng salt
+         │
+      Argon2id (64 MB, 3 passes, 4 lanes)
+         │
+      64-byte master key
+         ├─ HKDF-Extract+Expand → 32-byte encryption key
+         └─ HKDF-Extract+Expand → 32-byte nonce seed
 ```
 
 The salt is stored in plaintext in the file header. The master key and all intermediate key material are stored in `Zeroizing<Vec<u8>>` which zeroes memory on drop.
@@ -587,8 +598,8 @@ The salt is stored in plaintext in the file header. The master key and all inter
 
 **Protected against:**
 - Offline brute-force: Argon2id with 64 MB memory cost makes GPU attacks expensive.
-- Ciphertext tampering: Every 1 MB chunk has an independent Poly1305 authentication tag. Corruption of any byte fails decryption of that chunk.
-- Nonce reuse: Each encryption generates a fresh 24-byte random nonce via `OsRng`. With 192-bit nonces, collision probability is negligible even at billions of files.
+- Ciphertext tampering: Every 1 MB chunk has an independent GCM-SIV authentication tag (GHASH). Corruption of any byte fails decryption of that chunk.
+- Nonce reuse: Each encryption generates a fresh 7-byte (56-bit) random nonce via `OsRng`. `EncryptorBE32` expands it to 12 bytes internally with a per-chunk counter. Fresh nonce per file makes collision probability negligible.
 - Sensitive data in memory: Plaintext buffers and keys are wrapped in `Zeroizing<>`, zeroed on drop. Passwords are cleared from UI state immediately after the crypto thread starts.
 
 **Not protected against:**
