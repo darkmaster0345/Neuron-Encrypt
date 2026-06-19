@@ -56,6 +56,9 @@ pub enum CryptoError {
 
     #[error("Legacy V2 file exceeds the 1 GB memory limit — re-encrypt with V3 format")]
     LegacyFileTooLarge,
+
+    #[error("Operation cancelled by user")]
+    Cancelled,
 }
 
 /// Result type alias for crypto operations.

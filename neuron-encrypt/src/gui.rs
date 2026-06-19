@@ -451,6 +451,7 @@ impl NeuronEncryptApp {
 
         let password = self.password.clone();
         let mode = self.mode;
+        let cancel = self.cancel_flag.clone();
         let ctx_clone = ctx.clone();
         self.password = Zeroizing::new(String::new());
         self.confirm_password = Zeroizing::new(String::new());
@@ -467,19 +468,23 @@ impl NeuronEncryptApp {
             };
 
             let result = if mode == Mode::Encrypt {
-                crypto::encrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter)
+                crypto::encrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter, Some(&cancel))
             } else {
-                crypto::decrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter)
+                crypto::decrypt_file(&file_path, &dest, false, password.as_bytes(), &throttled_reporter, Some(&cancel))
             };
 
             match result {
                 Ok(_) => {
-                    let hash = if mode == Mode::Decrypt {
-                        compute_sha256(&dest)
+                    if cancel.load(Ordering::SeqCst) {
+                        let _ = tx.try_send(GuiMsg::Error(CryptoError::Cancelled));
                     } else {
-                        hash_source
-                    };
-                    let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned(), hash));
+                        let hash = if mode == Mode::Decrypt {
+                            compute_sha256(&dest)
+                        } else {
+                            hash_source
+                        };
+                        let _ = tx.try_send(GuiMsg::Done("Operation complete.".to_owned(), hash));
+                    }
                 }
                 Err(e) => {
                     let _ = tx.try_send(GuiMsg::Error(e));
@@ -583,9 +588,9 @@ impl NeuronEncryptApp {
                 let throttled = ThrottledReporter::new(&reporter);
 
                 let result = if mode == Mode::Encrypt {
-                    crypto::encrypt_file(src, &dest, false, password.as_bytes(), &throttled)
+                    crypto::encrypt_file(src, &dest, false, password.as_bytes(), &throttled, Some(&cancel))
                 } else {
-                    crypto::decrypt_file(src, &dest, false, password.as_bytes(), &throttled)
+                    crypto::decrypt_file(src, &dest, false, password.as_bytes(), &throttled, Some(&cancel))
                 };
 
                 match result {
@@ -1346,13 +1351,13 @@ impl NeuronEncryptApp {
             });
 
         ui.add_space(14.0);
-        ui.label(
-            egui::RichText::new(
-                "This run cannot be force-cancelled from the GUI once it has started.",
-            )
-            .font(FontId::new(10.5, FontFamily::Monospace))
-            .color(Palette::TEXT_LO),
-        );
+        if self
+            .draw_button(ui, "Cancel", vec2(120.0, 36.0), ButtonKind::Secondary, true)
+            .clicked()
+        {
+            self.cancel_flag.store(true, Ordering::SeqCst);
+            self.status = Some("Canceling operation...".to_owned());
+        }
     }
 
     fn draw_result(&mut self, ui: &mut egui::Ui, ok: bool) {
