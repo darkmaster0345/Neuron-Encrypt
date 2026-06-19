@@ -8,6 +8,7 @@ use clap_complete::{generate, Shell};
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use neuron_encrypt_core::crypto::{self, ProgressReporter, ThrottledReporter};
 use neuron_encrypt_core::error::CryptoError;
+use neuron_encrypt_core::utils::{constant_time_eq, is_vx2_file, HumanBytes};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -105,19 +106,17 @@ enum Command {
     },
 }
 
-fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
+fn read_password(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, (ExitCode, String)> {
     if let Some(path) = password_file {
-        let bytes = fs::read(path).unwrap_or_else(|e| {
-            eprintln!("Error: Cannot read password file: {e}");
-            std::process::exit(ExitCode::BadInput as i32);
-        });
-        let mut pw = Zeroizing::new(String::from_utf8(bytes).unwrap_or_else(|e| {
-            eprintln!("Error: Password file contains invalid UTF-8: {e}");
-            std::process::exit(ExitCode::BadInput as i32);
-        }));
+        let bytes = fs::read(path).map_err(|e| {
+            (ExitCode::BadInput, format!("Cannot read password file: {e}"))
+        })?;
+        let mut pw = Zeroizing::new(String::from_utf8(bytes).map_err(|e| {
+            (ExitCode::BadInput, format!("Password file contains invalid UTF-8: {e}"))
+        })?);
         let trimmed_len = pw.trim_end_matches(&['\r', '\n'][..]).len();
         pw.truncate(trimmed_len);
-        return pw;
+        return Ok(pw);
     }
 
     if let Ok(pw) = std::env::var("NEURON_PASSWORD") {
@@ -127,7 +126,7 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
         eprintln!(
             "[WARN] Prefer --password-file with a 0600-permission file for sensitive use."
         );
-        return Zeroizing::new(pw);
+        return Ok(Zeroizing::new(pw));
     }
 
     loop {
@@ -137,42 +136,18 @@ fn read_password(password_file: &Option<PathBuf>) -> Zeroizing<String> {
                     eprintln!("Error: Passphrase cannot be empty.");
                     continue;
                 }
-                return Zeroizing::new(pw);
+                return Ok(Zeroizing::new(pw));
             }
             Err(e) => {
-                eprintln!("Error reading passphrase: {e}");
-                std::process::exit(ExitCode::BadInput as i32);
+                return Err((ExitCode::BadInput, format!("Error reading passphrase: {e}")));
             }
         }
     }
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    let len_a = a.len();
-    let len_b = b.len();
-    let max_len = len_a.max(len_b);
 
-    let mut byte_comparison_result = 0;
-
-    for i in 0..max_len {
-        let byte_a = a.get(i).unwrap_or(&0);
-        let byte_b = b.get(i).unwrap_or(&0);
-        byte_comparison_result |= byte_a ^ byte_b;
-    }
-
-    let len_diff = len_a ^ len_b;
-    // len_mismatch_flag will be 0 if lengths are equal, 1 if lengths are different
-    let len_mismatch_flag = (((len_diff | len_diff.wrapping_neg()) >> (usize::BITS - 1)) & 1) as u8;
-
-    // Combine byte comparison result with length mismatch flag
-    // If either bytes don't match OR lengths don't match, final_result will be non-zero
-    let final_result = byte_comparison_result | len_mismatch_flag;
-
-    final_result == 0
-}
-
-fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, String> {
-    let pass1 = read_password(password_file);
+fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<String>, (ExitCode, String)> {
+    let pass1 = read_password(password_file)?;
     let pass2 = loop {
         match rpassword::prompt_password("Confirm passphrase: ") {
             Ok(pw) => {
@@ -182,11 +157,11 @@ fn read_password_confirmed(password_file: &Option<PathBuf>) -> Result<Zeroizing<
                 }
                 break Zeroizing::new(pw);
             }
-            Err(e) => return Err(format!("Error reading passphrase: {e}")),
+            Err(e) => return Err((ExitCode::BadInput, format!("Error reading passphrase: {e}"))),
         }
     };
     if !constant_time_eq(pass1.as_bytes(), pass2.as_bytes()) {
-        return Err("Passphrases do not match".to_owned());
+        return Err((ExitCode::BadInput, "Passphrases do not match".to_owned()));
     }
     Ok(pass1)
 }
@@ -249,23 +224,6 @@ impl ProgressReporter for IndProgress {
 impl Drop for IndProgress {
     fn drop(&mut self) {
         self.pb.finish_with_message("Complete");
-    }
-}
-
-struct HumanBytes(u64);
-
-impl std::fmt::Display for HumanBytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let b = self.0;
-        if b < 1024 {
-            write!(f, "{b} B")
-        } else if b < 1024 * 1024 {
-            write!(f, "{:.1} KB", b as f64 / 1024.0)
-        } else if b < 1024 * 1024 * 1024 {
-            write!(f, "{:.1} MB", b as f64 / (1024.0 * 1024.0))
-        } else {
-            write!(f, "{:.2} GB", b as f64 / (1024.0 * 1024.0 * 1024.0))
-        }
     }
 }
 
@@ -386,12 +344,6 @@ fn check_output_exists(path: &Path, force: bool, json: bool) -> Result<(), ExitC
     Ok(())
 }
 
-fn is_vx2_file(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.eq_ignore_ascii_case("vx2"))
-        .unwrap_or(false)
-}
 
 fn emit_json(result: &JsonResult) {
     match serde_json::to_string(result) {
@@ -435,13 +387,29 @@ fn run() -> Result<(), ExitCode> {
         {
             match read_password_confirmed(&cli.password_file) {
                 Ok(password) => password,
-                Err(msg) => {
+                Err((code, msg)) => {
                     eprintln!("Error: {msg}");
-                    return Err(ExitCode::BadInput);
+                    return Err(code);
                 }
             }
         }
-        _ => read_password(&cli.password_file),
+        _ => match read_password(&cli.password_file) {
+            Ok(password) => password,
+            Err((code, msg)) => {
+                if cli.json {
+                    emit_json(&JsonResult {
+                        status: "error".into(),
+                        output_path: None,
+                        bytes_processed: None,
+                        duration_ms: start.elapsed().as_millis(),
+                        sha256: None,
+                        error: Some(msg.clone()),
+                    });
+                }
+                eprintln!("Error: {msg}");
+                return Err(code);
+            }
+        }
     };
 
     if password.len() < crypto::MIN_PASSWORD_LEN {
