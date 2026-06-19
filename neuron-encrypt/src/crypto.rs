@@ -45,8 +45,8 @@ pub const EXTENSION: &str = ".vx2";
 /// authentication tag. The final chunk is sealed with `encrypt_last`/`decrypt_last`
 /// to prevent truncation attacks.
 ///
-/// Memory profile: Argon2id (64 MB) during key derivation, then ~2 MB constant
-/// during 1 MB chunk streaming — peak ~66 MB regardless of file size.
+/// Memory profile: Argon2id (256 MB) during key derivation, then ~2 MB constant
+/// during 1 MB chunk streaming — peak ~258 MB regardless of file size.
 pub const MAGIC_V3: &[u8; 8] = b"VAULTX03";
 /// 16-byte salt — 128-bit entropy, recommended minimum for Argon2.
 pub const SALT_V3_LEN: usize = 16;
@@ -160,7 +160,7 @@ fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> 
     let mut final_key = Zeroizing::new(vec![0u8; 32]);
 
     let mut intermediate = Zeroizing::new(vec![0u8; 64]);
-    let params = Params::new(65_536, 3, 4, Some(64))
+    let params = Params::new(262_144, 3, 4, Some(64))
         .map_err(|error| CryptoError::Argon2Failed(error.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     argon2
@@ -180,7 +180,7 @@ fn derive_key(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> 
 fn derive_key_v3(password: &[u8], salt: &[u8]) -> CryptoResult<Zeroizing<Vec<u8>>> {
     let mut final_key = Zeroizing::new(vec![0u8; 32]);
     let mut intermediate = Zeroizing::new(vec![0u8; 64]);
-    let params = Params::new(65_536, 3, 4, Some(64))
+    let params = Params::new(262_144, 3, 4, Some(64))
         .map_err(|e| CryptoError::Argon2Failed(e.to_string()))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     argon2

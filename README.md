@@ -29,7 +29,7 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 ## What's New in 2.0
 
 - **Zero File Size Limit**: Encrypt files of any size. The streaming engine removed the old 2 GB cap — terabyte-scale files work fine.
-- **Constant ~66 MB RAM**: Argon2id key derivation uses 64 MB (fixed), and 1 MB chunk streaming adds ~2 MB. Peak stays at ~66 MB regardless of file size.
+- **Constant ~258 MB RAM**: Argon2id key derivation uses 256 MB (fixed), and 1 MB chunk streaming adds ~2 MB. Peak stays at ~258 MB regardless of file size.
 - **High-Efficiency Batch Queue Processing**: Select multiple files, enter one passphrase, and the app processes them sequentially. If any file fails (disk full, permission denied), its temporary data is cleaned up and the queue moves to the next file — the app never crashes.
 - **VAULTX03 Streaming Engine**: AES-256-GCM-SIV with STREAM BE32 construction. Files are encrypted in 1 MB chunks with per-chunk authentication tags, keeping memory flat and guaranteeing integrity.
 - **I/O Governor for Large Files**: Prevents OS dirty page cache saturation during multi-gigabyte encryptions. Every ~100 MB the engine forces a disk flush and yields the thread, eliminating system-wide freezes.
@@ -62,11 +62,11 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 |---|---|---|
 | Language | **100% Safe Rust** | Zero `unsafe` blocks in the codebase — memory safety guaranteed by the borrow checker |
 | Cipher | **AES-256-GCM-SIV** (RFC 8452) | Nonce-misuse resistant authenticated encryption |
-| Key Derivation | **Argon2id** | Memory-hard KDF: 64 MiB, 3 iterations, 4 lanes, 32-byte output — GPU/ASIC resistant |
+| Key Derivation | **Argon2id** | Memory-hard KDF: 256 MiB, 3 iterations, 4 lanes, 32-byte output — GPU/ASIC resistant |
 | Key Expansion | **HKDF-SHA512** | Cryptographic domain separation between V2 and V3 pipelines |
 | Randomness | **OsRng** (OS CSPRNG) | Fresh 16-byte salt + 7-byte stream nonce generated per file |
 | Memory Hygiene | **Zeroizing\<T\>** | Key material zeroed from RAM on scope exit |
-| Streaming I/O | **EncryptorBE32 / DecryptorBE32** | Constant ~66 MB RAM regardless of file size |
+| Streaming I/O | **EncryptorBE32 / DecryptorBE32** | Constant ~258 MB RAM regardless of file size |
 | File Writes | **Atomic .tmp → rename** | No partial or corrupted files on crash |
 | Batch Error Handling | **Per-file isolation** | Failed files cleaned up; remaining queue continues |
 | I/O Governor | **sync_data + thread yield** | Flushes disk cache every ~100 MB; prevents OS dirty page freezes on large files |
@@ -75,19 +75,10 @@ Decrypting works the same way: drop the `.vx2` file, enter the original passphra
 
 ```
 Argon2id:
-  Memory     : 64 MiB (65,536 KiB)
+  Memory     : 256 MiB (262,144 KiB)
   Iterations : 3
   Lanes      : 4
   Output     : 32 bytes
-
-AES-256-GCM-SIV:
-  Key  : 256 bits
-  Tag  : 128 bits (16 bytes) per chunk
-
-Streaming:
-  Chunk Size : 1 MB (1,048,576 bytes)
-  Nonce      : 7 bytes (STREAM BE32 construction)
-  Max File   : ~4 Exabytes (2^32 × 1 MB)
 ```
 
 ### VAULTX03 File Format
@@ -122,10 +113,10 @@ VAULTX02 files are automatically detected by their magic bytes and routed to the
 ### Memory Profile
 
 ```
-Key derivation (Argon2id) : ~64 MB  (fixed, 65,536 KiB blocks)
+Key derivation (Argon2id) : ~256 MB  (fixed, 262,144 KiB blocks)
 Stream buffer (1 MB chunk): ~2 MB   (read + ciphertext buffer)
-───────────────────────────────────────────────────────────────
-Peak RAM                  : ~66 MB  (constant, independent of file size)
+─────────────────────────────────────────────────────────────
+Peak RAM                  : ~258 MB  (constant, independent of file size)
 ```
 
 ---
@@ -564,7 +555,7 @@ For full setup, JNI architecture details, and building instructions, see the [An
 |-------|-----------|------------|
 | Encryption (V3) | AES-256-GCM-SIV (BE32 streaming) | 56-bit stream nonce per file, 128-bit auth tag per 1 MB chunk |
 | Encryption (V2 legacy) | AES-256-GCM-SIV | 96-bit nonce, 128-bit auth tag |
-| Key Derivation | Argon2id | m=65536 (64 MB), t=3 iterations, p=4 lanes |
+| Key Derivation | Argon2id | m=262144 (256 MB), t=3 iterations, p=4 lanes |
 | Key Expansion | HKDF-SHA512 | Two separate 256-bit subkeys: enc + nonce |
 | Integrity | GHASH (GCM-SIV) | Per-chunk authentication; any bit-flip fails |
 | RNG | OS CSPRNG (`OsRng`) | `getrandom` crate; no `rand` global state |
@@ -576,7 +567,7 @@ For full setup, JNI architecture details, and building instructions, see the [An
 V3 (VAULTX03 streaming):
   passphrase + 16-byte OsRng salt
          │
-      Argon2id (64 MB, 3 passes, 4 lanes)
+      Argon2id (256 MB, 3 passes, 4 lanes)
          │
       64-byte master key
          ├─ HKDF-Extract+Expand → 32-byte encryption key
@@ -585,7 +576,7 @@ V3 (VAULTX03 streaming):
 V2 (VAULTX02 legacy):
   passphrase + 32-byte OsRng salt
          │
-      Argon2id (64 MB, 3 passes, 4 lanes)
+      Argon2id (256 MB, 3 passes, 4 lanes)
          │
       64-byte master key
          ├─ HKDF-Extract+Expand → 32-byte encryption key
@@ -597,7 +588,7 @@ The salt is stored in plaintext in the file header. The master key and all inter
 ### Threat Model
 
 **Protected against:**
-- Offline brute-force: Argon2id with 64 MB memory cost makes GPU attacks expensive.
+- Offline brute-force: Argon2id with 256 MB memory cost makes GPU attacks expensive.
 - Ciphertext tampering: Every 1 MB chunk has an independent GCM-SIV authentication tag (GHASH). Corruption of any byte fails decryption of that chunk.
 - Nonce reuse: Each encryption generates a fresh 7-byte (56-bit) random nonce via `OsRng`. `EncryptorBE32` expands it to 12 bytes internally with a per-chunk counter. Fresh nonce per file makes collision probability negligible.
 - Sensitive data in memory: Plaintext buffers and keys are wrapped in `Zeroizing<>`, zeroed on drop. Passwords are cleared from UI state immediately after the crypto thread starts.
